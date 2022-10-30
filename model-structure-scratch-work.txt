@@ -1,0 +1,56 @@
+# Transcription task:
+Given `source audio` and potentially some surrounding `context`, convert the `source` into a MIDI-roll-like representation of notes (the `target`).
+
+## Hyperparameters:
+- The duration of the `source`
+- The duration of the `context` (before and after the source)
+- The way the `source` and `context` are given to the model
+      Likely a mel FFT
+- The features of note events in the `target`
+      Pitch
+      Onset/offset
+      Timing
+      Instrument identification, potentially
+- The way note events are represented in the `target`
+      How are features tokenized? Pitch and timing on/off and instrument are all independent
+      Do we limit the number of notes the model can output at once? (i.e. "predict at most 15 note events")
+      Or do we use an auto-regressive sampling method to produce a sequence that stops when the model emits a learned End-Of-Sequence token?
+      How do we quantize/tokenize timing?
+
+# Synthesis task:
+Given `source note events`, and potentially some surrounding `context note events` and/or earlier `context audio`, convert the `source` into the audio signal that it "sounds like" (the `target`)
+
+## Hyperparameters:
+- The duration of the `source`
+- The duration of the `context`
+      (Note that `context audio` cannot include audio after the `target`, because then this model would not be able to synthesize audio without knowing what it would synthesize in the future)
+- The way the `context audio` is given to the model
+      Mel FFT? Raw audio signal? Both?
+- The features of note events in the `source`/`context`
+      See discussion of hyperparameters for transcription
+- The way note events are represented in the `source`/`context`
+      See discussion of hyperparameters for transcription
+      Do we limit the number of notes that can be input to the model at once?
+      Or do we have the model take a sequence of note events and a learned End-Of-Input token, and then ask it to produce the `target`?
+
+
+# Encoding task:
+Given `source audio`, and potentially some surrounding `context audio`, convert the `source` into a `compact` representation
+
+# Decoding task:
+Given a `source` compact representation and potentially some surrounding `context` compact representation and/or earlier `context audio`, convert the `source` into an audio signal (the `target`)
+
+Crucially, when the encoder and decoder are composed, they should behave close to the identity function, producing `target` audio that "sounds like" the `source` audio, and producing `target` compact representations that are similar to the `source` compact representation
+
+## Hyperparameters (for encoder and decoder):
+- The duration of the `source audio`
+- The duration of the `context audio`
+      (Note that for the decoder, the `context` audio cannot include audio after the `target`, because then this model would not be able to synthesize audio without knowing what it would synthesize in the future)
+- The way the `source` and `context` are given to the model
+      Mel spectrogram? Raw samples? Both?
+- The way similarity between `source` and `target` audio is calculated
+      Raw sample-to-sample difference?
+      FFT similarity when `source`/`target` is surrounded by the context audio, using multiple window sizes?
+- The size of the `compact representation`
+     Back of the envelope math suggests that any note in music, regardless of pitch, instrument, volume, duration, playing technique, etc, can be represented in 24-32 bits.
+     Assuming there are 10 notes a second is probably a good starting number. Some music will have more notes a second, others will have less, but 10 feels like a decent middleground. (But it would be good to check this experimentally somehow, like counting the average/max number of concurrent midi notes in maestro)

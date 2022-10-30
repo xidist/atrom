@@ -70,7 +70,10 @@ def get_concurrent_note_stats(mid):
         concurrency = []
         for msg in track:
             if msg.type == "note_on":
-                note_is_present[(msg.channel, msg.note)] = True
+                if msg.velocity > 0:
+                    note_is_present[(msg.channel, msg.note)] = True
+                else:
+                    note_is_present[(msg.channel, msg.note)] = False
             elif msg.type == "note_off":
                 note_is_present[(msg.channel, msg.note)] = False
 

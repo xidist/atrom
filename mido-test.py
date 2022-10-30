@@ -1,6 +1,7 @@
 import mido
 from mido import MidiFile
 import pprint
+import os
 
 def get_ticks_to_seconds_and_tempo_changes(mid):
     """
@@ -62,7 +63,8 @@ def get_concurrent_note_stats(mid):
         zeros_omitted_avg = sum(concurrency) / (len([x for x in concurrency if x != 0]) or 1)
 
         return m, raw_avg, zeros_omitted_avg
-    
+
+    stats_per_track = []
     for track in mid.tracks:
         note_is_present = {(c, k) : False for k in range(128) for c in range(16)}
         concurrency = []
@@ -73,14 +75,34 @@ def get_concurrent_note_stats(mid):
                 note_is_present[(msg.channel, msg.note)] = False
 
             concurrency.append(sum(note_is_present.values()))
-
-        return get_stats(concurrency)
+        stats_per_track.append(get_stats(concurrency))
+        
+    return stats_per_track
 
 def get_concurrent_note_stats_from_filenames(filenames):
-    for filename in filenames:
+    m = 0
+    raw_avg = 0
+    zeros_omitted_avg = 0
+    for i, filename in enumerate(filenames):
+        if i % 10 == 0:
+            print(i, len(filenames))
+        
         mid = MidiFile(filename)
-        print(filename, get_concurrent_note_stats(mid))
+        stats = get_concurrent_note_stats(mid)
+        should_print = False
+        for track in stats:
+            if track[0] > m:
+                should_print = True
+                m = track[0]
+            if track[1] > raw_avg:
+                should_print = True
+                raw_avg = track[1]
+            if track[2] > zeros_omitted_avg:
+                should_print = True
+                zeros_omitted_avg = track[2]
 
+        if should_print:
+            print(filename, stats)
 
 def get_maestro_midi_filenames():
     result = []
@@ -89,8 +111,8 @@ def get_maestro_midi_filenames():
     for year in years:
         searchDir = "/z/atrom/datasets/labeled/maestro/maestro-v3.0.0/" + year + "/"
         for file in os.listdir(searchDir):
-            if os.path.splitext(file) == ".mid" or os.path.splitext(file) == ".midi":
-                result += searchDir + file
+            if os.path.splitext(file)[1] == ".mid" or os.path.splitext(file)[1] == ".midi":
+                result.append(searchDir + file)
     return result
 
 

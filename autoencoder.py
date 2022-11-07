@@ -145,18 +145,49 @@ class AutoEncoder(torch.nn.Module):
         self.right_context = right_context
         self.spec_obj = spec_obj
 
+        # todo: replace these magic numbers with good code
+        n_mels = 128
+        spec_length = 64
+
+        nonlinear = torch.nn.LeakyReLU()
+
+        self.encoder = torch.nn.Sequential(
+            spec_obj,
+            torch.nn.Linear(n_mels * spec_length, 4096),
+            nonlinear,
+            torch.nn.Linear(4096, 2048),
+            nonlinear,
+            torch.nn.Linear(2048, 512),
+            nonlinear,
+            torch.nn.Linear(512, 256)
+        )
+
+        self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(256, 1024),
+            nonlinear,
+            torch.nn.Linear(1024, 4096),
+            nonlinear,
+            torch.nn.Linear(4096, 16384),
+            nonlinear,
+            torch.nn.Linear(16384, 32768),
+            nonlinear,
+            torch.nn.Linear(32768, source)
+        )
+
     def forward(self, x):
         """
         x: Tensor[batch_count x left_context + source + right_context]
 
-        returns: Tensor[batch_count + source]
+        returns: Tensor[batch_count x source]
         """
 
-        raise Exception("Todo")
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
 
-def pipeline_sketch():
+        return decoded
+
+def main():
     """
-    Note from Maddy: This is an unfinished sketch of the pipeline for training the autoencoder. 
     The basic idea is that we loop over some unlabeled training examples, and for each file,
     compute the loss and update the autoencoder. Since the autoencoder can only focus on
     a few seconds of audio at a time, we split the entire song (which might be many minutes)
@@ -168,10 +199,21 @@ def pipeline_sketch():
     source = 44100
     right_context = 44100
     batch_offset = 44100
+    
+    learning_rate = 1e-3
+    weight_decay = 1e-5
+    epochs = 10
+    validate_every_n = 10
+
+    training_file_names = []
+    validation_file_names = []
+    model_save_path = ""
 
     # Create the model...
     auto_encoder = AutoEncoder(left_context, source, right_context)
-    raise Exception("Todo: make an optimizer object?")
+    optimizer = torch.optim.AdamW(auto_encoder.parameters(),
+                                  lr=learning_rate,
+                                  weight_decay=weight_decay)
 
     # Helper function to compute loss...
     def compute_loss_from_file(file_path):
@@ -198,14 +240,39 @@ def pipeline_sketch():
                                         left_context, source, right_context)
         return loss
 
-    files = ["ligGood.wav"]
+    should_save_model = False
+    for epoch in epochs:
+        print("Epoch | Batch | Train Loss | Valid Loss")
 
-    for file in files:
-        raise Exception("Todo: zero out grads at the start of this loop")
+        random.shuffle(training_file_names)
+        total_loss_from_epoch = 0
+        training_stats_string = ""
+        valid_stats_string = ""
 
-        loss = compute_loss_from_file(file)
+        for batch_index, file_name in enumerate(training_file_names):
+            optimizer.zero_grad()
+            loss = compute_loss_from_file(file_name)
+            loss.backward()
+            optimizer.step()
+            total_loss_from_epoch += loss
 
-        raise Exception("Todo: backprop using the loss")
+            # print out current training stats, and validate occasionally
+            training_stats_string = (
+                "\r {epoch:02d}"
+                "| {batch_index}/{len(training_file_names)}"
+                "| {total_loss_from_epoch / (batch_index + 1)}"
+            )
 
+            if batch_index > 0 and batch_index % validate_every_n == 0:
+                with torch.no_grad():
+                    valid_loss = 0
+                    for valid_file in validation_file_names:
+                        valid_loss += compute_loss_from_file(file_name)
+                    valid_stats_string = "| {valid_loss / len(validation_file_names)}"
 
+            print(training_stats_string + valid_stats_string, end="")
 
+        print("TODO: save the model sometimes")
+
+        if should_save_model:
+            torch.save(auto_encoder.state_dict(), model_save_path)

@@ -22,24 +22,19 @@ def load_and_check(file_path):
     return waveform, sample_rate
 
 
-def make_batches_with_source_and_context(signal, left_context_width, source_width, right_context_width, source_start_times):
+def make_batches(signal, hp):
     """
     signal: Tensor[frame_length] containing the audio data
-    left_context_width: int. the number of samples before source_start_times[i] that
-                        should be included in a batch
-    source_width: int. the number of samples, starting at source_start_times[i], that
-                  should be included in a batch
-    right_context_width: int. the number of samples after the end of source_width that
-                         should be included in a batch
-    source_start_times: Tensor[int] containing the times at which each batch should start
-
-    returns: Tensor[batch_size x (left_context_width + source_width + right_context_width)].
+    hp: Hyperparameters
+    returns: Tensor[batch_size x (left_context + source + right_context)].
              A tensor of batches, where each batch is a contiguous slice of audio data. 
              May be left or right padded with zeros at its ends
     """
-    signal = torch.nn.functional.pad(signal, (left_context_width, source_width + right_context_width),
+    source_start_times = torch.arange(start=0, end=signal.shape[0], step=hp.batch_offset, dtype=int)
+    
+    signal = torch.nn.functional.pad(signal, (hp.left_context, hp.source + hp.right_context),
                                      "constant", 0)
-    subscript_length = left_context_width + source_width + right_context_width
+    subscript_length = hp.left_context + hp.source + hp.right_context
 
     # make a [batch x subscript_length] tensor for indexing signal
     indices = torch.arange(start=0, end=subscript_length, step=1, dtype=int)
@@ -51,55 +46,38 @@ def make_batches_with_source_and_context(signal, left_context_width, source_widt
 
     return signal[indices]
 
-def make_expected_from_batches(batches, left_context, source, right_context):
+def make_expected_from_batches(batches, hp):
     """
     batches: Tensor[batch_count x left_context + source + right_context]. Audio signals
              for the autoencoder to reproduce
-    left_context: int. The number of left context samples
-    source: int. The number of source samples
-    right_context: int. The number of source samples
+    hp: Hyperparameters
 
     returns: Tensor[batch_count x source]. The center slice of each batch we want
              the autoencoder to reproduce
     """
     # make a [source] tensor for subscripting batches
-    indices = torch.arange(start=0, end=source, step=1, dtype=int) + left_context
+    indices = torch.arange(start=0, end=source, step=1, dtype=int) + hp.left_context
 
     result =  batches[:, indices]
     return result
 
-def put_inference_inside_batches(batches, inference, left_context, source, right_context):
+def put_inference_inside_batches(batches, inference, hp):
     """
     batches: Tensor[batch_count x left_context + source + right_context]. Audio signals
              for the autoencoder to reproduce
     inference: Tensor[batch_count x source]. The audio signal the autoencoder actually reproduced
-    left_context: int. The number of left context samples
-    source: int. The number of source samples
-    right_context: int. The number of source samples
+    hp: Hyperparameters
 
     returns: Tensor[batch_count x left_context + source + right_context]. A copy of batches,
              with the source samples replaced with the contents of inference
     """
     b_copy = batches.clone()
     # make a [source] tensor for subscripting b_copy
-    indices = torch.arange(start=0, end=source, step=1, dtype=int) + left_context
+    indices = torch.arange(start=0, end=hp.source, step=1, dtype=int) + hp.left_context
     b_copy[:, indices] = inference
     return b_copy
 
-def make_spectrogram_object(sample_rate):
-    """
-    Factory method to return a MelSpectrogram module
-    """
-    return torchaudio.transforms.MelSpectrogram(
-        sample_rate=sample_rate,
-        n_fft=4096,
-        win_length=4096,
-        hop_length=2048,
-        n_mels=128,
-        window_fn=torch.hann_window,
-        normalized=True)
-
-def compute_autoencoder_loss(batches, expected, inference, spec_objs, left_context, source, right_context):
+def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
     """
     batches: Tensor[batch_count x left_context + source + right_context]. Raw audio signal
     expected: Tensor[batch_count x source]
@@ -108,9 +86,7 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, left_conte
                The MSE will be computed using each spectrogram object, comparing the 
                spectrogram between using batches, and the spectrogram putting inference
                in the middle of batches
-    left_context: int. The number of left context samples
-    source: int. The number of source samples
-    right_context: int. The number of source samples
+    hp: Hyperparameters
 
     returns: float. The loss of the autoencoder
     """
@@ -121,8 +97,7 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, left_conte
     # do we need to find a way to balance these to the same order of magnitude?
     
     loss = torch.nn.functional.mse_loss(inference, expected)
-    batches_with_inference = put_inference_inside_batches(batches, inference, left_context,
-                                                          source, right_context)
+    batches_with_inference = put_inference_inside_batches(batches, inference, hp)
     
     for spec_obj in spec_objs:
         inf_spec = spec_obj(batches_with_inference)
@@ -132,18 +107,16 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, left_conte
     return loss
 
 class AutoEncoder(torch.nn.Module):
-    def __init__(self, left_context, source, right_context, spec_obj):
+    def __init__(self, left_context, source, right_context):
         """
         left_context: int. The number of left context samples
         source: int. The number of source samples
         right_context: int. The number of source samples
-        spec_obj: The object that should be used to compute the spectrogram
         """
 
         self.left_context = left_context
         self.source = source
         self.right_context = right_context
-        self.spec_obj = spec_obj
 
         # todo: replace these magic numbers with good code
         n_mels = 128
@@ -152,7 +125,6 @@ class AutoEncoder(torch.nn.Module):
         nonlinear = torch.nn.LeakyReLU()
 
         self.encoder = torch.nn.Sequential(
-            spec_obj,
             torch.nn.Linear(n_mels * spec_length, 4096),
             nonlinear,
             torch.nn.Linear(4096, 2048),
@@ -174,17 +146,82 @@ class AutoEncoder(torch.nn.Module):
             torch.nn.Linear(32768, source)
         )
 
-    def forward(self, x):
+    def forward(self, x, spec_obj):
         """
         x: Tensor[batch_count x left_context + source + right_context]
+        spec_obj: An object to use to first compute the spectrogram
 
         returns: Tensor[batch_count x source]
         """
 
-        encoded = self.encoder(x)
+        speced = spec_obj(x)
+        encoded = self.encoder(speced)
         decoded = self.decoder(encoded)
 
         return decoded
+
+class Hyperparameters:
+    """
+    Bag of hyperparameters that need to be passed around at times
+    """
+    def __init__(self,
+                 left_context = 44100,
+                 source = 44100,
+                 right_context = 44100,
+                 batch_offset = 44100,
+                 learning_rate = 1e-3,
+                 weight_decay = 1e-5,
+                 epochs = 10,
+                 validate_every_n = 10):
+        
+        self.left_context = left_context
+        self.source = source
+        self.right_context = right_context
+        self.batch_offset = batch_offset
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.epochs = 10
+        self.validate_every_n = 10
+
+    def make_spectrogram_object(self, sample_rate):
+        """
+        Makes a MelSpectrogram module
+        """
+        return torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=4096,
+            win_length=4096,
+            hop_length=2048,
+            n_mels=128,
+            window_fn=torch.hann_window,
+            normalized=True)
+
+    def make_autoencoder(self):
+        """
+        Makes an AutoEncoder
+        """
+        return AutoEncoder(self.left_context, self.source, self.right_context)
+
+def end_to_end(model, hp, source_file, dest_file):
+    """
+    Runs the contents of `source_file` through the AutoEncoder `model`, writing the 
+    reconstructed audio file into `dest_file`. 
+
+    model: AutoEncoder
+    hp: Hyperparameters
+    source_file: str
+    dest_file: str
+    """
+    signal, sample_rate = load_and_check(source_file)
+    spec_obj = hp.make_spectrogram_object(sample_rate=sample_rate)
+    batches = make_batches(signal, hp)
+    inference = auto_encoder(batches, spec_obj)
+    # concat the batches into a single audio stream
+    inference = inference.view(-1)
+    # turn into a tensor of channels, which is mono
+    inference = inference.unsqueeze(0)
+
+    torchaudio.save(dest_file, inference, sample_rate)
 
 def main():
     """
@@ -194,23 +231,14 @@ def main():
     into batches that cover its duration
     """
 
-    # Hyperparameters...
-    left_context = 44100
-    source = 44100
-    right_context = 44100
-    batch_offset = 44100
-    
-    learning_rate = 1e-3
-    weight_decay = 1e-5
-    epochs = 10
-    validate_every_n = 10
+    hyperparameters = Hyperparameters()
 
     training_file_names = []
     validation_file_names = []
     model_save_path = ""
 
     # Create the model...
-    auto_encoder = AutoEncoder(left_context, source, right_context)
+    auto_encoder = hyperparameters.make_autoencoder()
     optimizer = torch.optim.AdamW(auto_encoder.parameters(),
                                   lr=learning_rate,
                                   weight_decay=weight_decay)
@@ -218,26 +246,19 @@ def main():
     # Helper function to compute loss...
     def compute_loss_from_file(file_path):
         signal, sample_rate = load_and_check(file)
-        # Computing a spectrogram has a lot of fiddly parameters for setup,
-        # so that's hidden away in a helper function
-        spec_obj = make_spectrogram_object(sample_rate=sample_rate)
-
-        # each batch should start at batch_offset samples further into the signal
-        start_times = torch.arange(start=0, end=signal.shape[0], step=batch_offset, dtype=int)
-        # get the batched input we give to the autoencoder
-        batches = make_batches_with_source_and_context(signal, left_context, source, right_context, start_times)
-        # get the expected output we want it to produce
-        expected = make_expected_from_batches(batches, left_context, source, right_context)
+        spec_obj = hyperparameters.make_spectrogram_object(sample_rate=sample_rate)
+        batches = make_batches(signal, hyperparameters)
+        expected = make_expected_from_batches(batches, hyperparameters)
 
         # inference = torch.randn_like(expected)
-        inference = auto_encoder(batches)
+        inference = auto_encoder(batches, spec_obj)
 
         # compute the loss between what we expected, and what the model infered.
         # use each spectrogram object in spec_objs to say that the model
         # should also get the spectrograms of expected and inference to look similar
         spec_objs = [spec_obj]
         loss = compute_autoencoder_loss(batches, expected, inference, spec_objs,
-                                        left_context, source, right_context)
+                                        hyperparameters)
         return loss
 
     should_save_model = False

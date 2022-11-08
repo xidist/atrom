@@ -2,6 +2,9 @@ import torch
 import torchaudio
 import math
 import random
+
+torch.manual_seed(0)
+random.seed(0)
 print("finished importing modules...")
 
 def load_and_check(file_path):
@@ -16,11 +19,20 @@ def load_and_check(file_path):
     # these should hold on maestro, but might be too strict for youtube/JMS?
     # if so, we'll have to think about how to handle the failures
     info = torchaudio.info(file_path)
-    assert info.sample_rate == 44100
-    assert info.num_channels == 1
+    assert info.sample_rate == 44100 or info.sample_rate == 48000
+    assert info.num_channels == 1 or info.num_channels == 2
     
     waveform, sample_rate = torchaudio.load(file_path)
+
+    if info.num_channels == 2:
+        waveform = torch.sum(waveform, dim=0)
+
+    # squeeze out the channel dimension, since it's already mono
     waveform = waveform.squeeze()
+
+    if info.sample_rate != 44100:
+        waveform = torchaudio.functional.resample(waveform, sample_rate, 44100)
+    
     return waveform, sample_rate
 
 
@@ -97,7 +109,7 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
     # loss from wave-to-wave comparison is 1,
     # and loss from spectrogram comparison is 158.
     # do we need to find a way to balance these to the same order of magnitude?
-    
+
     loss = torch.nn.functional.mse_loss(inference, expected)
     batches_with_inference = put_inference_inside_batches(batches, inference, hp)
     
@@ -106,6 +118,9 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
         exp_spec = spec_obj(batches)
         # todo: magic number 158
         loss += torch.nn.functional.mse_loss(inf_spec, exp_spec) / 158
+
+    # mse averages over the batches, but we don't want to
+    loss *= batches.shape[0]
 
     return loss
 
@@ -116,33 +131,35 @@ class AutoEncoder(torch.nn.Module):
         """
         super().__init__()
 
-
+        self.hp = hp
+        
         spec_length = (hp.left_context + hp.source + hp.right_context) / hp.hop_length
         spec_length = int(math.ceil(spec_length))
 
         nonlinear = torch.nn.LeakyReLU()
 
         self.encoder = torch.nn.Sequential(
-            torch.nn.Linear(hp.n_mels * spec_length, 4096),
+            torch.nn.Linear(hp.n_mels * spec_length + hp.source, 4096),
             nonlinear,
             torch.nn.Linear(4096, 2048),
             nonlinear,
-            torch.nn.Linear(2048, 512),
-            nonlinear,
-            torch.nn.Linear(512, 256)
+            torch.nn.Linear(2048, 1024),
         )
 
         self.decoder = torch.nn.Sequential(
-            torch.nn.Linear(256, 1024),
+            torch.nn.Linear(1024, 2048),
             nonlinear,
-            torch.nn.Linear(1024, 4096),
+            torch.nn.Linear(2048, 4096),
             nonlinear,
-            torch.nn.Linear(4096, 16384),
+            torch.nn.Linear(4096, 8192),
+            nonlinear,
+            torch.nn.Linear(8192, 16384),
             nonlinear,
             torch.nn.Linear(16384, 32768),
             nonlinear,
             torch.nn.Linear(32768, hp.source)
         )
+
 
     def forward(self, x, spec_obj):
         """
@@ -152,13 +169,20 @@ class AutoEncoder(torch.nn.Module):
         returns: Tensor[batch_count x source]
         """
 
-
         speced = spec_obj(x)
         speced = torch.reshape(speced, (speced.shape[0], -1))
-        encoded = self.encoder(speced)
+        cated = torch.cat((speced, x[:,self.hp.left_context:self.hp.left_context+self.hp.source]),
+                          dim=1)
+        encoded = self.encoder(cated)
         decoded = self.decoder(encoded)
 
         return decoded
+
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
 
 class Hyperparameters:
     """
@@ -169,6 +193,7 @@ class Hyperparameters:
                  source = 44100,
                  right_context = 44100,
                  batch_offset = 44100,
+                 batch_size = 8,
                  learning_rate = 1e-4,
                  weight_decay = 1e-5,
                  epochs = 10,
@@ -180,6 +205,7 @@ class Hyperparameters:
         self.source = source
         self.right_context = right_context
         self.batch_offset = batch_offset
+        self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.epochs = 10
@@ -187,12 +213,12 @@ class Hyperparameters:
         self.n_mels = n_mels
         self.hop_length = hop_length
 
-    def make_spectrogram_object(self, sample_rate):
+    def make_spectrogram_object(self):
         """
         Makes a MelSpectrogram module
         """
         return torchaudio.transforms.MelSpectrogram(
-            sample_rate=sample_rate,
+            sample_rate=44100,
             n_fft=4096,
             win_length=4096,
             hop_length=self.hop_length,
@@ -210,20 +236,17 @@ def end_to_end(model, hp, source_file, dest_file):
     source_file: str
     dest_file: str
     """
-    print("will load")
     signal, sample_rate = load_and_check(source_file)
-    print(f"did load signal: {signal.shape}")
-    spec_obj = hp.make_spectrogram_object(sample_rate=sample_rate)
-    print("did make spec obj")
+    spec_obj = hp.make_spectrogram_object()
     batches = make_batches(signal, hp)
     inference = model(batches, spec_obj)
     inference = inference.view(-1)
     inference = inference.unsqueeze(0)
 
     torchaudio.save(dest_file, inference, sample_rate)
-    print(f"did save to {dest_file}")
 
-def train_model(hp, auto_encoder, training_file_names, validation_file_names):
+def train_model(hp, auto_encoder, training_file_names, validation_file_names,
+                starting_epoch=0, on_finish_epoch=None):
     """
     The basic idea is that we loop over some unlabeled training examples, and for each file,
     compute the loss and update the autoencoder. Since the autoencoder can only focus on
@@ -234,84 +257,143 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names):
     auto_encoder: AutoEncoder
     training_file_names: list[string]
     validation_file_names: list[string]
+    starting_epoch: int = 0
+    on_finish_epoch: (int) -> void = None
     """
 
-    model_save_path = ""
 
     optimizer = torch.optim.AdamW(auto_encoder.parameters(),
                                   lr=hp.learning_rate,
                                   weight_decay=hp.weight_decay)
 
-    # Helper function to compute loss...
-    def compute_loss_from_file(file_path):
-        signal, sample_rate = load_and_check(file_path)
-        spec_obj = hp.make_spectrogram_object(sample_rate=sample_rate)
-        batches = make_batches(signal, hp)
-        expected = make_expected_from_batches(batches, hp)
+    print("Epoch | Batch | Train Loss | Valid Loss")
 
-        # inference = torch.randn_like(expected)
-        inference = auto_encoder(batches, spec_obj)
-
-        # compute the loss between what we expected, and what the model infered.
-        # use each spectrogram object in spec_objs to say that the model
-        # should also get the spectrograms of expected and inference to look similar
-        spec_objs = [spec_obj]
-        loss = compute_autoencoder_loss(batches, expected, inference, spec_objs, hp)
-
-        return loss
-
-    should_save_model = False
-    for epoch in range(hp.epochs):
-        print("Epoch | Batch | Train Loss | Valid Loss")
-
+    for epoch in range(starting_epoch, starting_epoch + hp.epochs):
         random.shuffle(training_file_names)
         total_loss_from_epoch = 0
+        total_batches_from_epoch = 0
         training_stats_string = ""
         valid_stats_string = ""
 
-        for batch_index, file_name in enumerate(training_file_names):
-            optimizer.zero_grad()
-            loss = compute_loss_from_file(file_name)
-            loss.backward()
-            optimizer.step()
-            total_loss_from_epoch += loss
+        file_group_size = 16
+        file_groups = [file_group_size * i for i in range(
+            int(math.ceil(len(training_file_names) / file_group_size))
+        )]
+        random.shuffle(file_groups)
 
-            # print out current training stats, and validate occasionally
-            training_stats_string = (
-                f"\r{epoch:02d}    "
-                f"| {batch_index}/{len(training_file_names)}   "
-                f"| {total_loss_from_epoch / (batch_index + 1)}"
-            )
+        for file_group in file_groups:
+            file_group_end = file_group + file_group_size
+            file_group_end = min(file_group_end, len(training_file_names))
 
-            if batch_index > 0 and batch_index % hp.validate_every_n == 0:
-                with torch.no_grad():
-                    valid_loss = 0
-                    for valid_file in validation_file_names:
-                        valid_loss += compute_loss_from_file(file_name)
-                    valid_stats_string = f"| {valid_loss / len(validation_file_names)}"
+            macrobatches = []
+            for file_name in training_file_names[file_group : file_group_end]:
+                signal, sample_rate = load_and_check(file_name)
+                batches = make_batches(signal, hp)
+                expected = make_expected_from_batches(batches, hp)
 
-            print(training_stats_string + valid_stats_string, end="")
+                chunk_indices = [hp.batch_size * i for i in range(
+                    int(math.ceil(batches.shape[0] / hp.batch_size))
+                )]
+                for chunk_index in chunk_indices:
+                    subscript_end = chunk_index + hp.batch_size
+                    subscript_end = min(batches.shape[0], subscript_end)
+                    macrobatches.append((batches[chunk_index:subscript_end],
+                                         expected[chunk_index:subscript_end]))
 
-        print("\nTODO: save the model sometimes")
+            random.shuffle(macrobatches)
+            spec_obj = hp.make_spectrogram_object()
+            for batch in macrobatches:
+                optimizer.zero_grad()
+                x = batch[0]
+                y = batch[1]
+                inference = auto_encoder(x, spec_obj)
+                spec_objs = [spec_obj]
+                loss = compute_autoencoder_loss(x, y, inference, spec_objs, hp)
 
-        if should_save_model:
-            torch.save(auto_encoder.state_dict(), model_save_path)
+                loss.backward()
+                optimizer.step()
+                total_loss_from_epoch += loss
+                total_batches_from_epoch += x.shape[0]
+
+                # print out current training stats, and validate occasionally
+                training_stats_string = (
+                    f"\r{epoch:02d}    "
+                    f"| {total_batches_from_epoch}  "
+                    f"| {total_loss_from_epoch / (total_batches_from_epoch + 1)}"
+                )
+
+                if total_batches_from_epoch > 0 and total_batches_from_epoch % hp.validate_every_n == 0:
+                    with torch.no_grad():
+                        valid_loss = 0
+                        for valid_file in validation_file_names:
+                            signal, sample_rate = load_and_check(valid_file)
+                            batches = make_batches(signal, hp)
+                            expected = make_expected_from_batches(batches, hp)
+                            inference = auto_encoder(batches, spec_obj)
+                            spec_objs = [spec_obj]
+                            valid_loss += compute_autoencoder_loss(batches,
+                                                                   expected,
+                                                                   inference,
+                                                                   spec_objs, hp)
+                            
+                        if validation_file_names:
+                            valid_stats_string = f"| {valid_loss / len(validation_file_names)}"
+
+                print(training_stats_string + valid_stats_string, end="")
+
+        print("")
+        if on_finish_epoch:
+            on_finish_epoch(epoch)
 
     return auto_encoder
 
 
 def maddy_local_testing():
-    training = ["../let_it_go_versions/raw/orchestra.wav"]
-    validation = ["../let_it_go_versions/raw/vocals.wav"]
+    training = [
+                "/Users/msa/myshot.wav",
+                "../let_it_go_versions/raw/orchestra.wav",
+                "../let_it_go_versions/raw/vocals.wav",
+                ]
+    validation = []
     
     hp = Hyperparameters()
+    hp.batch_size = 32
+    hp.epochs = 20
+    hp.learning_rate = 3e-6
     auto_encoder = AutoEncoder(hp)
+
+    starting_epoch = 40
+    auto_encoder.load(f"../output/models/e{starting_epoch - 1}")
+    
     print("finished creating auto_encoder...")
 
-    train_model(hp, auto_encoder, training, validation)
-    
-    source_file = "../let_it_go_versions/raw/soundtrack.wav"
-    dest_file = "../e2e_lig_soundtrack.wav"
-    end_to_end(auto_encoder, hp, source_file, dest_file)
+    def on_finish_epoch(n):
+        import os
+        os.mkdir(f"../output/e2e/e{n}")
+        
+        end_to_end(auto_encoder, hp,
+                   source_file="../let_it_go_versions/raw/soundtrack.wav",
+                   dest_file=f"../output/e2e/e{n}/lig_soundtrack.wav")
+
+        end_to_end(auto_encoder, hp,
+                   source_file="../let_it_go_versions/raw/orchestra.wav",
+                   dest_file=f"../output/e2e/e{n}/lig_orchestra.wav")
+
+        end_to_end(auto_encoder, hp,
+                   source_file="../let_it_go_versions/raw/vocals.wav",
+                   dest_file=f"../output/e2e/e{n}/lig_vocals.wav")
+
+        end_to_end(auto_encoder, hp,
+                   source_file="/Users/msa/myshot.wav",
+                   dest_file=f"../output/e2e/e{n}/myshot.wav")
+
+        last_epoch = n == starting_epoch + hp.epochs - 1
+        if last_epoch or n % 3 == 0:
+            auto_encoder.save(f"../output/models/e{n}")
+        
+
+    train_model(hp, auto_encoder, training, validation,
+                starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)
+
 
 maddy_local_testing()

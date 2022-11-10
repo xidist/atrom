@@ -342,10 +342,14 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
 
 
 def maddy_local_testing():
-    training = [
-                "/Users/msa/myshot.wav",
-                "../let_it_go_versions/raw/orchestra.wav",
-                "../let_it_go_versions/raw/vocals.wav",
+    root_dir = "../foobar-maddy/"
+    input_audio_dir = root_dir + "input_audio/"
+    output_audio_dir = root_dir + "output_audio/"
+    models_dir = root_dir + "models/"
+    
+    training = [input_audio_dir + "myshot.wav",
+                input_audio_dir + "lig_orchestra.wav",
+                input_audio_dir + "lig_vocals.wav",
                 ]
     validation = []
     
@@ -355,38 +359,31 @@ def maddy_local_testing():
     hp.learning_rate = 2e-6
     auto_encoder = AutoEncoder(hp)
 
-    starting_epoch = 400
-    auto_encoder.load(f"../output/models/e{starting_epoch - 1}")
+    starting_epoch = 0
+    # auto_encoder.load(models_dir + f"e{starting_epoch - 1}")
     
     print("finished creating auto_encoder...")
 
     def on_finish_epoch(n):
         import os
-        os.mkdir(f"../output/e2e/e{n}")
-        
-        end_to_end(auto_encoder, hp,
-                   source_file="../let_it_go_versions/raw/soundtrack.wav",
-                   dest_file=f"../output/e2e/e{n}/lig_soundtrack.wav")
+        os.mkdir(output_audio_dir + f"e{n}")
 
-        end_to_end(auto_encoder, hp,
-                   source_file="../let_it_go_versions/raw/orchestra.wav",
-                   dest_file=f"../output/e2e/e{n}/lig_orchestra.wav")
+        end_to_end_files = [
+            "lig_soundtrack.wav",
+            "lig_orchestra.wav",
+            "lig_vocals.wav",
+            "myshot.wav",
+            "all-star.wav",
+        ]
 
-        end_to_end(auto_encoder, hp,
-                   source_file="../let_it_go_versions/raw/vocals.wav",
-                   dest_file=f"../output/e2e/e{n}/lig_vocals.wav")
-
-        end_to_end(auto_encoder, hp,
-                   source_file="/Users/msa/myshot.wav",
-                   dest_file=f"../output/e2e/e{n}/myshot.wav")
-
-        end_to_end(auto_encoder, hp,
-                   source_file="/Users/msa/all-star.wav",
-                   dest_file=f"../output/e2e/e{n}/all-star.wav")
+        for file_name in end_to_end_files:
+            end_to_end(auto_encoder, hp,
+                       source_file=input_audio_dir + file_name,
+                       dest_file=output_audio_dir + f"e{n}/" + file_name)
 
         last_epoch = n == starting_epoch + hp.epochs - 1
         if last_epoch or n % 3 == 0:
-            auto_encoder.save(f"../output/models/e{n}")
+            auto_encoder.save(models_dir + f"e{n}")
 
     train_model(hp, auto_encoder, training, validation,
                 starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)

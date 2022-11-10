@@ -132,32 +132,26 @@ class AutoEncoder(torch.nn.Module):
         super().__init__()
 
         self.hp = hp
-        
-        spec_length = (hp.left_context + hp.source + hp.right_context) / hp.hop_length
-        spec_length = int(math.ceil(spec_length))
-
         nonlinear = torch.nn.LeakyReLU()
 
+
+        self.downsample = torchaudio.transforms.Resample(
+            orig_freq=44100,
+            new_freq=16000
+        )
+
+        self.upsample = torchaudio.transforms.Resample(
+            orig_freq=16000,
+            new_freq=44100,
+        )
+
         self.encoder = torch.nn.Sequential(
-            torch.nn.Linear(hp.n_mels * spec_length + hp.source, 4096),
+            torch.nn.Linear(16000, 8000),
             nonlinear,
-            torch.nn.Linear(4096, 2048),
-            nonlinear,
-            torch.nn.Linear(2048, 1024),
         )
 
         self.decoder = torch.nn.Sequential(
-            torch.nn.Linear(1024, 2048),
-            nonlinear,
-            torch.nn.Linear(2048, 4096),
-            nonlinear,
-            torch.nn.Linear(4096, 8192),
-            nonlinear,
-            torch.nn.Linear(8192, 16384),
-            nonlinear,
-            torch.nn.Linear(16384, 32768),
-            nonlinear,
-            torch.nn.Linear(32768, hp.source)
+            torch.nn.Linear(8000, 16000)
         )
 
 
@@ -169,14 +163,13 @@ class AutoEncoder(torch.nn.Module):
         returns: Tensor[batch_count x source]
         """
 
-        speced = spec_obj(x)
-        speced = torch.reshape(speced, (speced.shape[0], -1))
-        cated = torch.cat((speced, x[:,self.hp.left_context:self.hp.left_context+self.hp.source]),
-                          dim=1)
-        encoded = self.encoder(cated)
-        decoded = self.decoder(encoded)
+        x = x[:, self.hp.left_context:self.hp.left_context + self.hp.source]
+        x = self.downsample(x)
+        x = self.encoder(x)
+        x = self.decoder(x)
+        x = self.upsample(x)
 
-        return decoded
+        return x
 
     def save(self, path):
         torch.save(self.state_dict(), path)
@@ -240,10 +233,10 @@ def end_to_end(model, hp, source_file, dest_file):
     spec_obj = hp.make_spectrogram_object()
     batches = make_batches(signal, hp)
     inference = model(batches, spec_obj)
-    inference = inference.view(-1)
+    inference = inference.reshape(-1)
     inference = inference.unsqueeze(0)
 
-    torchaudio.save(dest_file, inference, sample_rate)
+    torchaudio.save(dest_file, inference, 44100)
 
 def train_model(hp, auto_encoder, training_file_names, validation_file_names,
                 starting_epoch=0, on_finish_epoch=None):
@@ -359,10 +352,10 @@ def maddy_local_testing():
     hp = Hyperparameters()
     hp.batch_size = 32
     hp.epochs = 20
-    hp.learning_rate = 3e-6
+    hp.learning_rate = 2e-6
     auto_encoder = AutoEncoder(hp)
 
-    starting_epoch = 40
+    starting_epoch = 400
     auto_encoder.load(f"../output/models/e{starting_epoch - 1}")
     
     print("finished creating auto_encoder...")
@@ -387,13 +380,24 @@ def maddy_local_testing():
                    source_file="/Users/msa/myshot.wav",
                    dest_file=f"../output/e2e/e{n}/myshot.wav")
 
+        end_to_end(auto_encoder, hp,
+                   source_file="/Users/msa/all-star.wav",
+                   dest_file=f"../output/e2e/e{n}/all-star.wav")
+
         last_epoch = n == starting_epoch + hp.epochs - 1
         if last_epoch or n % 3 == 0:
             auto_encoder.save(f"../output/models/e{n}")
-        
 
     train_model(hp, auto_encoder, training, validation,
                 starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)
 
 
 maddy_local_testing()
+
+
+
+
+
+
+
+

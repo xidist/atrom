@@ -15,6 +15,8 @@ def load_and_check(file_path, hp):
     returns: a tuple of (signal, sample_rate)
     signal: a Tensor[sample_length] containing the audio data, in the range -1 to 1
     sample_rate: int, the number of samples recorded each second
+
+    hp: Hyperparameters
     """
 
     # lets do some basic sanity checks on the file format
@@ -33,8 +35,8 @@ def load_and_check(file_path, hp):
     waveform = waveform.squeeze()
     waveform = waveform.to(hp.device)
 
-    if info.sample_rate != 44100:
-        waveform = torchaudio.functional.resample(waveform, sample_rate, 44100)
+    if info.sample_rate != hp.sample_rate:
+        waveform = torchaudio.functional.resample(waveform, sample_rate, hp.sample_rate)
     
     return waveform, sample_rate
 
@@ -119,8 +121,7 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
     for spec_obj in spec_objs:
         inf_spec = spec_obj(batches_with_inference)
         exp_spec = spec_obj(batches)
-        # todo: magic number 158
-        loss += torch.nn.functional.mse_loss(inf_spec, exp_spec) / 158
+        loss += torch.nn.functional.mse_loss(inf_spec, exp_spec) / 10
 
     # mse averages over the batches, but we don't want to
     loss *= batches.shape[0]
@@ -137,24 +138,17 @@ class AutoEncoder(torch.nn.Module):
         self.hp = hp
         nonlinear = torch.nn.LeakyReLU()
 
-
-        self.downsample = torchaudio.transforms.Resample(
-            orig_freq=44100,
-            new_freq=16000
-        )
-
-        self.upsample = torchaudio.transforms.Resample(
-            orig_freq=16000,
-            new_freq=44100,
-        )
+        in_size = hp.left_context + hp.source + hp.right_context
+        out_size = hp.source
+        self.spec_size = hp.n_mels * (1 + math.floor(in_size / hp.hop_length))
 
         self.encoder = torch.nn.Sequential(
-            torch.nn.Linear(16000, 8000),
+            torch.nn.Linear(in_size + self.spec_size, 8000),
             nonlinear,
         )
 
         self.decoder = torch.nn.Sequential(
-            torch.nn.Linear(8000, 16000)
+            torch.nn.Linear(8000, out_size)
         )
 
 
@@ -166,11 +160,11 @@ class AutoEncoder(torch.nn.Module):
         returns: Tensor[batch_count x source]
         """
 
-        x = x[:, self.hp.left_context:self.hp.left_context + self.hp.source]
-        x = self.downsample(x)
+        s = spec_obj(x)
+        s = s.reshape(s.shape[0], -1)
+        x = torch.cat((x, s), dim=1)
         x = self.encoder(x)
         x = self.decoder(x)
-        x = self.upsample(x)
 
         return x
 
@@ -185,18 +179,21 @@ class Hyperparameters:
     Bag of hyperparameters that need to be passed around at times
     """
     def __init__(self,
-                 left_context = 44100,
-                 source = 44100,
-                 right_context = 44100,
-                 batch_offset = 44100,
+                 sample_rate = 16000,
+                 left_context = 16000,
+                 source = 16000,
+                 right_context = 16000,
+                 batch_offset = 16000,
                  batch_size = 8,
                  learning_rate = 1e-4,
                  weight_decay = 1e-5,
                  epochs = 10,
                  validate_every_n = 10,
                  n_mels = 128,
-                 hop_length = 2048):
-        
+                 hop_length = 2000,
+                 n_fft = 4000):
+
+        self.sample_rate = sample_rate
         self.left_context = left_context
         self.source = source
         self.right_context = right_context
@@ -208,6 +205,7 @@ class Hyperparameters:
         self.validate_every_n = 10
         self.n_mels = n_mels
         self.hop_length = hop_length
+        self.n_fft = n_fft
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if torch.cuda.is_available():
@@ -218,9 +216,9 @@ class Hyperparameters:
         Makes a MelSpectrogram module
         """
         return torchaudio.transforms.MelSpectrogram(
-            sample_rate=44100,
-            n_fft=4096,
-            win_length=4096,
+            sample_rate=self.sample_rate,
+            n_fft=self.n_fft,
+            win_length=self.n_fft,
             hop_length=self.hop_length,
             n_mels=self.n_mels,
             window_fn=torch.hann_window,
@@ -243,9 +241,11 @@ def end_to_end(model, hp, source_file, dest_file):
     inference = inference.reshape(-1)
     inference = inference.unsqueeze(0)
 
+    out_sample_rate = 44100
+    inference = torchaudio.functional.resample(inference, hp.sample_rate, out_sample_rate)
     inference = inference.cpu()
+    torchaudio.save(dest_file, inference, out_sample_rate)
 
-    torchaudio.save(dest_file, inference, 44100)
 
 def train_model(hp, auto_encoder, training_file_names, validation_file_names,
                 starting_epoch=0, on_finish_epoch=None):
@@ -270,12 +270,14 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
 
     print("Epoch | Batch | Train Loss | Valid Loss")
 
+    valid_stats_string = ""
+
     for epoch in range(starting_epoch, starting_epoch + hp.epochs):
         random.shuffle(training_file_names)
         total_loss_from_epoch = 0
         total_batches_from_epoch = 0
         training_stats_string = ""
-        valid_stats_string = ""
+
 
         file_group_size = 16
         file_groups = [file_group_size * i for i in range(
@@ -321,27 +323,31 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
                 training_stats_string = (
                     f"\r{epoch:02d}    "
                     f"| {total_batches_from_epoch}  "
-                    f"| {total_loss_from_epoch / (total_batches_from_epoch + 1)}"
+                    f"| {total_loss_from_epoch / (total_batches_from_epoch + 1)}  "
                 )
 
-                if total_batches_from_epoch > 0 and total_batches_from_epoch % hp.validate_every_n == 0:
-                    with torch.no_grad():
-                        valid_loss = 0
-                        for valid_file in validation_file_names:
-                            signal, sample_rate = load_and_check(valid_file, hp)
-                            batches = make_batches(signal, hp)
-                            expected = make_expected_from_batches(batches, hp)
-                            inference = auto_encoder(batches, spec_obj)
-                            spec_objs = [spec_obj]
-                            valid_loss += compute_autoencoder_loss(batches,
-                                                                   expected,
-                                                                   inference,
-                                                                   spec_objs, hp)
-                            
-                        if validation_file_names:
-                            valid_stats_string = f"| {valid_loss / len(validation_file_names)}"
-
                 print(training_stats_string + valid_stats_string, end="")
+
+            if epoch > 0 and epoch % hp.validate_every_n == 0:
+                with torch.no_grad():
+                    valid_loss = 0
+                    valid_denom = 0
+                    for valid_file in validation_file_names:
+                        signal, sample_rate = load_and_check(valid_file, hp)
+                        batches = make_batches(signal, hp)
+                        expected = make_expected_from_batches(batches, hp)
+                        inference = auto_encoder(batches, spec_obj)
+                        spec_objs = [spec_obj]
+                        valid_loss += compute_autoencoder_loss(batches,
+                                                               expected,
+                                                               inference,
+                                                               spec_objs, hp)
+                        valid_denom += batches.shape[0]
+
+                        if valid_denom != 0:
+                            valid_stats_string = f"| {valid_loss / valid_denom}"
+                            print(training_stats_string + valid_stats_string, end="")
+
 
         print("")
         if on_finish_epoch:
@@ -360,18 +366,22 @@ def maddy_local_testing():
                 input_audio_dir + "lig_orchestra.wav",
                 input_audio_dir + "lig_vocals.wav",
                 ]
-    validation = []
+    validation = [input_audio_dir + "lig_soundtrack.wav",
+                  input_audio_dir + "all-star.wav"]
     
     hp = Hyperparameters()
     hp.batch_size = 32
     hp.epochs = 20
-    hp.learning_rate = 2e-6
+    hp.learning_rate = 1e-5
+    hp.left_context = 0
+    hp.right_context = 0
     auto_encoder = AutoEncoder(hp)
 
     starting_epoch = 0
-    # auto_encoder.load(models_dir + f"e{starting_epoch - 1}")
-
+    if starting_epoch != 0:
+        auto_encoder.load(models_dir + f"e{starting_epoch - 1}")
     auto_encoder = auto_encoder.to(hp.device)
+
     print("finished creating auto_encoder...")
 
     def on_finish_epoch(n):
@@ -400,11 +410,3 @@ def maddy_local_testing():
 
 
 maddy_local_testing()
-
-
-
-
-
-
-
-

@@ -121,7 +121,7 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
     for spec_obj in spec_objs:
         inf_spec = spec_obj(batches_with_inference)
         exp_spec = spec_obj(batches)
-        loss += torch.nn.functional.mse_loss(inf_spec, exp_spec) / 10
+        loss += torch.nn.functional.mse_loss(inf_spec, exp_spec) / 10000
 
     # mse averages over the batches, but we don't want to
     loss *= batches.shape[0]
@@ -189,6 +189,7 @@ class Hyperparameters:
                  weight_decay = 1e-5,
                  epochs = 10,
                  validate_every_n = 10,
+                 e2e_every_n = 1,
                  n_mels = 128,
                  hop_length = 2000,
                  n_fft = 4000):
@@ -203,6 +204,7 @@ class Hyperparameters:
         self.weight_decay = weight_decay
         self.epochs = 10
         self.validate_every_n = 10
+        self.e2e_every_n = e2e_every_n
         self.n_mels = n_mels
         self.hop_length = hop_length
         self.n_fft = n_fft
@@ -311,7 +313,7 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
                 x = batch[0]
                 y = batch[1]
                 inference = auto_encoder(x, spec_obj)
-                spec_objs = [spec_obj]
+                spec_objs = []
                 loss = compute_autoencoder_loss(x, y, inference, spec_objs, hp)
 
                 loss.backward()
@@ -337,7 +339,7 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
                         batches = make_batches(signal, hp)
                         expected = make_expected_from_batches(batches, hp)
                         inference = auto_encoder(batches, spec_obj)
-                        spec_objs = [spec_obj]
+                        spec_objs = []
                         valid_loss += compute_autoencoder_loss(batches,
                                                                expected,
                                                                inference,
@@ -396,12 +398,14 @@ def maddy_local_testing():
             "all-star.wav",
         ]
 
-        for file_name in end_to_end_files:
-            end_to_end(auto_encoder, hp,
-                       source_file=input_audio_dir + file_name,
-                       dest_file=output_audio_dir + f"e{n}/" + file_name)
-
         last_epoch = n == starting_epoch + hp.epochs - 1
+
+        if last_epoch or n % hp.e2e_every_n == 0:
+            for file_name in end_to_end_files:
+                end_to_end(auto_encoder, hp,
+                           source_file=input_audio_dir + file_name,
+                           dest_file=output_audio_dir + f"e{n}/" + file_name)
+
         if last_epoch or n % 3 == 0:
             auto_encoder.save(models_dir + f"e{n}")
 

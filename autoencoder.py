@@ -7,9 +7,11 @@ torch.manual_seed(0)
 random.seed(0)
 print("finished importing modules...")
 
-def load_and_check(file_path):
+def load_and_check(file_path, hp):
     """
     file_path: str, the path to the audio file to load
+    hp: Hyperparameters
+
     returns: a tuple of (signal, sample_rate)
     signal: a Tensor[sample_length] containing the audio data, in the range -1 to 1
     sample_rate: int, the number of samples recorded each second
@@ -29,6 +31,7 @@ def load_and_check(file_path):
 
     # squeeze out the channel dimension, since it's already mono
     waveform = waveform.squeeze()
+    waveform = waveform.to(hp.device)
 
     if info.sample_rate != 44100:
         waveform = torchaudio.functional.resample(waveform, sample_rate, 44100)
@@ -206,6 +209,10 @@ class Hyperparameters:
         self.n_mels = n_mels
         self.hop_length = hop_length
 
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            print("Using CUDA acceleration!")
+
     def make_spectrogram_object(self):
         """
         Makes a MelSpectrogram module
@@ -217,7 +224,7 @@ class Hyperparameters:
             hop_length=self.hop_length,
             n_mels=self.n_mels,
             window_fn=torch.hann_window,
-            normalized=True)
+            normalized=True).to(self.device)
 
 def end_to_end(model, hp, source_file, dest_file):
     """
@@ -229,12 +236,14 @@ def end_to_end(model, hp, source_file, dest_file):
     source_file: str
     dest_file: str
     """
-    signal, sample_rate = load_and_check(source_file)
+    signal, sample_rate = load_and_check(source_file, hp)
     spec_obj = hp.make_spectrogram_object()
     batches = make_batches(signal, hp)
     inference = model(batches, spec_obj)
     inference = inference.reshape(-1)
     inference = inference.unsqueeze(0)
+
+    inference = inference.cpu()
 
     torchaudio.save(dest_file, inference, 44100)
 
@@ -280,7 +289,7 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
 
             macrobatches = []
             for file_name in training_file_names[file_group : file_group_end]:
-                signal, sample_rate = load_and_check(file_name)
+                signal, sample_rate = load_and_check(file_name, hp)
                 batches = make_batches(signal, hp)
                 expected = make_expected_from_batches(batches, hp)
 
@@ -319,7 +328,7 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
                     with torch.no_grad():
                         valid_loss = 0
                         for valid_file in validation_file_names:
-                            signal, sample_rate = load_and_check(valid_file)
+                            signal, sample_rate = load_and_check(valid_file, hp)
                             batches = make_batches(signal, hp)
                             expected = make_expected_from_batches(batches, hp)
                             inference = auto_encoder(batches, spec_obj)
@@ -361,7 +370,8 @@ def maddy_local_testing():
 
     starting_epoch = 0
     # auto_encoder.load(models_dir + f"e{starting_epoch - 1}")
-    
+
+    auto_encoder = auto_encoder.to(hp.device)
     print("finished creating auto_encoder...")
 
     def on_finish_epoch(n):

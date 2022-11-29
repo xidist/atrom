@@ -355,6 +355,28 @@ def train_model(hp, auto_encoder, optimizer,
 
     return auto_encoder
 
+def recursively_find_files_in_dir(dir):
+    """
+    dir: string. The root directory to search at
+    
+    returns: list[string]. Each path starts with `dir`
+    """
+
+    result = []
+    for dirpath, dirnames, filenames in os.walk(dir):
+        result.append(os.path.join(dirpath, file))
+    return result
+
+def is_file_wav(filename):
+    """
+    filename: string
+
+    returns: bool. True if the file has a .wav extension, and False otherwise
+    """
+    return os.path.splitext(filename)[1] == ".wav"
+
+ENABLE_MADDY_LOCAL_TESTING = False
+
 def get_training_files():
     """
     Get the list of names of files to use for training
@@ -363,14 +385,18 @@ def get_training_files():
              or relative to the current working directory
     """
 
-    # mark: local maddy testing. remove in the future
-    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
-    files = ["lig_orchestra.wav", "lig_vocals.wav", "myshot.wav"]
-    return [os.path.join(search_dir, f) for f in files]
-    
-    
-    return []
+    if ENABLE_MADDY_LOCAL_TESTING:
+        # mark: local maddy testing. remove in the future
+        search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
+        files = ["lig_orchestra.wav", "lig_vocals.wav", "myshot.wav"]
+        return [os.path.join(search_dir, f) for f in files]
 
+    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy"
+    wav_files = [f for f in recursively_find_files_in_dir(search_dir)
+                 if is_wav_file(f)]
+
+    return wav_files[:int(len(wav_files) * 7 / 10)]
+    
 def get_validation_files():
     """
     Get the list of names of files to use for validation
@@ -378,13 +404,20 @@ def get_validation_files():
     returns: list[string]. each path should be either an absolute path,
              or relative to the current working directory
     """
+
+    if ENABLE_MADDY_LOCAL_TESTING:
+        # mark: local maddy testing. remove in the future
+        search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
+        files = ["lig_soundtrack.wav", "all-star.wav"]
+        return [os.path.join(search_dir, f) for f in files]
     
-    # mark: local maddy testing. remove in the future
-    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
-    files = ["lig_soundtrack.wav", "all-star.wav"]
-    return [os.path.join(search_dir, f) for f in files]
-    
-    return []
+    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy"
+    wav_files = [f for f in recursively_find_files_in_dir(search_dir)
+                 if is_wav_file(f)]
+
+    return wav_files[int(len(wav_files) * 7 / 10) :
+                     int(len(wav_files) * 85 / 100)]
+
 
 def get_demo_files():
     """
@@ -398,20 +431,24 @@ def get_demo_files():
              or relative to the current working directory
     """
     
-    # mark: local maddy testing. remove in the future
-    return get_training_files() + get_validation_files()
-    
-    return []
+    if ENABLE_MADDY_LOCAL_TESTING:
+        # mark: local maddy testing. remove in the future
+        return get_training_files() + get_validation_files()
+
+    val = get_validation_files()
+    return val[::int(len(val) / 10)]
 
 def get_checkpoint_file_path():
-    """
+    """,
     Get the name of the file to use for saving and resuming training
  
     returns: string. the path should be either an absolute path,
              or relative to the current working directory
     """
-    # mark: local maddy testing. remove in the future
-    return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/checkpoint"
+
+    if ENABLE_MADDY_LOCAL_TESTING:
+        # mark: local maddy testing. remove in the future
+        return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/checkpoint"
     
     return ""
 
@@ -423,8 +460,10 @@ def get_demo_write_directory():
     returns: string. the path should be either an absolute path,
              or relative to the current working directory
     """
-    # mark: local maddy testing. remove in the future
-    return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/output_audio"
+
+    if ENABLE_MADDY_LOCAL_TESTING:
+        # mark: local maddy testing. remove in the future
+        return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/output_audio"
     
     return ""
 

@@ -2,6 +2,7 @@ import torch
 import torchaudio
 import math
 import random
+import os
 
 torch.manual_seed(0)
 random.seed(0)
@@ -168,11 +169,6 @@ class AutoEncoder(torch.nn.Module):
 
         return x
 
-    def save(self, path):
-        torch.save(self.state_dict(), path)
-
-    def load(self, path):
-        self.load_state_dict(torch.load(path))
 
 class Hyperparameters:
     """
@@ -236,6 +232,7 @@ def end_to_end(model, hp, source_file, dest_file):
     source_file: str
     dest_file: str
     """
+    model.eval()
     signal, sample_rate = load_and_check(source_file, hp)
     spec_obj = hp.make_spectrogram_object()
     batches = make_batches(signal, hp)
@@ -246,10 +243,13 @@ def end_to_end(model, hp, source_file, dest_file):
     out_sample_rate = 44100
     inference = torchaudio.functional.resample(inference, hp.sample_rate, out_sample_rate)
     inference = inference.cpu()
+    if not os.path.exists(os.path.dirname(dest_file)):
+        os.makedirs(os.path.dirname(dest_file))
     torchaudio.save(dest_file, inference, out_sample_rate)
 
 
-def train_model(hp, auto_encoder, training_file_names, validation_file_names,
+def train_model(hp, auto_encoder, optimizer,
+                training_file_names, validation_file_names,
                 starting_epoch=0, on_finish_epoch=None):
     """
     The basic idea is that we loop over some unlabeled training examples, and for each file,
@@ -259,16 +259,12 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
 
     hp: Hyperparameters
     auto_encoder: AutoEncoder
+    optimizer: A torch optimizer (e.g. AdamW, SDG)
     training_file_names: list[string]
     validation_file_names: list[string]
     starting_epoch: int = 0
     on_finish_epoch: (int) -> void = None
     """
-
-
-    optimizer = torch.optim.AdamW(auto_encoder.parameters(),
-                                  lr=hp.learning_rate,
-                                  weight_decay=hp.weight_decay)
 
     print("Epoch | Batch | Train Loss | Valid Loss")
 
@@ -309,6 +305,7 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
             random.shuffle(macrobatches)
             spec_obj = hp.make_spectrogram_object()
             for batch in macrobatches:
+                auto_encoder.train()
                 optimizer.zero_grad()
                 x = batch[0]
                 y = batch[1]
@@ -332,6 +329,7 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
 
             if epoch > 0 and epoch % hp.validate_every_n == 0:
                 with torch.no_grad():
+                    auto_encoder.eval()
                     valid_loss = 0
                     valid_denom = 0
                     for valid_file in validation_file_names:
@@ -357,20 +355,80 @@ def train_model(hp, auto_encoder, training_file_names, validation_file_names,
 
     return auto_encoder
 
+def get_training_files():
+    """
+    Get the list of names of files to use for training
 
-def maddy_local_testing():
-    root_dir = "../foobar-maddy/"
-    input_audio_dir = root_dir + "input_audio/"
-    output_audio_dir = root_dir + "output_audio/"
-    models_dir = root_dir + "models/"
+    returns: list[string]. each path should be either an absolute path,
+             or relative to the current working directory
+    """
+
+    # mark: local maddy testing. remove in the future
+    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
+    files = ["lig_orchestra.wav", "lig_vocals.wav", "myshot.wav"]
+    return [os.path.join(search_dir, f) for f in files]
     
-    training = [input_audio_dir + "myshot.wav",
-                input_audio_dir + "lig_orchestra.wav",
-                input_audio_dir + "lig_vocals.wav",
-                ]
-    validation = [input_audio_dir + "lig_soundtrack.wav",
-                  input_audio_dir + "all-star.wav"]
     
+    return []
+
+def get_validation_files():
+    """
+    Get the list of names of files to use for validation
+
+    returns: list[string]. each path should be either an absolute path,
+             or relative to the current working directory
+    """
+    
+    # mark: local maddy testing. remove in the future
+    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
+    files = ["lig_soundtrack.wav", "all-star.wav"]
+    return [os.path.join(search_dir, f) for f in files]
+    
+    return []
+
+def get_demo_files():
+    """
+    Get the list of names of files to use for demoing. Every so often,
+    the program will pass each demo file through the autoencoder,
+    saving the output audio to disk (i.e. for humans to qualitatively
+    assess training progress). For the most accurate assessment,
+    only use files in the validation set. 
+
+    returns: list[string]. each path should be either an absolute path,
+             or relative to the current working directory
+    """
+    
+    # mark: local maddy testing. remove in the future
+    return get_training_files() + get_validation_files()
+    
+    return []
+
+def get_checkpoint_file_path():
+    """
+    Get the name of the file to use for saving and resuming training
+ 
+    returns: string. the path should be either an absolute path,
+             or relative to the current working directory
+    """
+    # mark: local maddy testing. remove in the future
+    return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/checkpoint"
+    
+    return ""
+
+def get_demo_write_directory():
+    """
+    Get the name of the directory to put reconstructed demo files in. (Demo files
+    will be put into subdirectories based on the epoch after they were created)
+
+    returns: string. the path should be either an absolute path,
+             or relative to the current working directory
+    """
+    # mark: local maddy testing. remove in the future
+    return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/output_audio"
+    
+    return ""
+
+def main():
     hp = Hyperparameters()
     hp.batch_size = 32
     hp.epochs = 20
@@ -379,38 +437,64 @@ def maddy_local_testing():
     hp.right_context = 0
     auto_encoder = AutoEncoder(hp)
 
-    starting_epoch = 0
-    if starting_epoch != 0:
-        auto_encoder.load(models_dir + f"e{starting_epoch - 1}")
+    optimizer = torch.optim.AdamW(auto_encoder.parameters(),
+                                  lr=hp.learning_rate,
+                                  weight_decay=hp.weight_decay)
+
+
+    def save_training(epoch):
+        """
+        epoch: int. The most recently completed epoch
+        """
+        torch.save({
+            "epoch" : epoch,
+            "model_state_dict" : auto_encoder.state_dict(),
+            "optimizer_state_dict" : optimizer.state_dict()
+        }, get_checkpoint_file_path())
+
+    def load_training(model, optimizer):
+        """
+        model: An already initizlied AutoEncoder. (The weights will be set
+               using the data loaded from disk, but the model structure must
+               be the same)
+        optimizer: The torch optimizer used for training. Must be the same type
+                   when saving and loading
+        
+        returns: int. The most recently completed epoch
+        """
+        if os.path.exists(get_checkpoint_file_path()):
+            checkpoint = torch.load(get_checkpoint_file_path())
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+            return checkpoint["epoch"] + 1
+
+        else:
+            return 0
+
+    starting_epoch = load_training(auto_encoder, optimizer)
     auto_encoder = auto_encoder.to(hp.device)
 
     print("finished creating auto_encoder...")
 
     def on_finish_epoch(n):
-        import os
-        os.mkdir(output_audio_dir + f"e{n}")
-
-        end_to_end_files = [
-            "lig_soundtrack.wav",
-            "lig_orchestra.wav",
-            "lig_vocals.wav",
-            "myshot.wav",
-            "all-star.wav",
-        ]
+        this_epoch_demo_directory = os.path.join(get_demo_write_directory(), f"e{n}")
 
         last_epoch = n == starting_epoch + hp.epochs - 1
 
         if last_epoch or n % hp.e2e_every_n == 0:
-            for file_name in end_to_end_files:
+            for path in get_demo_files():
+                last_path_component = os.path.basename(os.path.normpath(path))
+                dest_file = os.path.join(this_epoch_demo_directory, last_path_component)
                 end_to_end(auto_encoder, hp,
-                           source_file=input_audio_dir + file_name,
-                           dest_file=output_audio_dir + f"e{n}/" + file_name)
+                           source_file=path,
+                           dest_file=dest_file)
 
-        if last_epoch or n % 3 == 0:
-            auto_encoder.save(models_dir + f"e{n}")
+        save_training(n)
 
-    train_model(hp, auto_encoder, training, validation,
+    train_model(hp, auto_encoder, optimizer,
+                get_training_files(), get_validation_files(),
                 starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)
 
 
-maddy_local_testing()
+main()

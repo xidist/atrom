@@ -2,9 +2,6 @@ import torchaudio
 import math
 import os
 
-torch.manual_seed(0)
-random.seed(0)
-print("finished importing modules...")
 
 def check(file_path):
     """
@@ -110,17 +107,17 @@ def get_demo_files():
         return get_training_files() + get_validation_files()
 
     val = get_validation_files()
-    return val[::int(len(val) / 10)]
+    return val[::int(len(val) / 20)]
 
 def main():
     train_duration = sum([check(f) for f in get_training_files()])
-    print(f"train_duration: {train_duration}")
+    print(f"train_duration: {train_duration / 3600} hours")
 
     validation_duration = sum([check(f) for f in get_validation_files()])
-    print(f"validation_duration: {validation_duration}")
+    print(f"validation_duration: {validation_duration / 3600} hours")
 
     demo_duration = sum([check(f) for f in get_demo_files()])
-    print(f"demo_duration: {demo_duration}")
+    print(f"demo_duration: {demo_duration / 3600} hours")
 
 
 main()

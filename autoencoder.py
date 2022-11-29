@@ -440,7 +440,7 @@ def get_demo_files():
         return get_training_files() + get_validation_files()
 
     val = get_validation_files()
-    return val[::int(len(val) / 10)]
+    return val[::int(len(val) / 20)]
 
 def get_checkpoint_file_path():
     """,

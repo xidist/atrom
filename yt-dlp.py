@@ -1,11 +1,20 @@
+# usage: to let this program keep running after logging out over ssh, run
+# `nohup python yt-dlp.py &`. stdout will redirect to `nohup.out`
+
 import subprocess
 
 
 # list of urls of youtube playlists to download
 playlistUrls = [
-                "https://www.youtube.com/playlist?list=OLAK5uy_m6DPmzLVYAE6a9OKViK3HM7nxcp6v4ORE",
-                "https://www.youtube.com/playlist?list=PL8F6B0753B2CCA128"
-                ]
+    "https://www.youtube.com/playlist?list=OLAK5uy_m6DPmzLVYAE6a9OKViK3HM7nxcp6v4ORE",
+    "https://www.youtube.com/playlist?list=PL8F6B0753B2CCA128",
+    "https://www.youtube.com/playlist?list=PLbYGZP48h5lLUSCqvU6vuarjEaQWM_dcN",
+    "https://www.youtube.com/playlist?list=PLZN_exA7d4RVmCQrG5VlWIjMOkMFZVVOc",
+    "https://www.youtube.com/playlist?list=PL3oW2tjiIxvQW6c-4Iry8Bpp3QId40S5S",
+    "https://www.youtube.com/playlist?list=PLetgZKHHaF-Zq1Abh-ZGC4liPd_CV3Uo4",
+    "https://www.youtube.com/playlist?list=PLFYZh4cL2f0qohRXux42oPNysXzqkT3m_",
+    "https://www.youtube.com/playlist?list=PLw-VjHDlEOgs658kAHR_LAaILBXb-s6Q5",
+]
 
 
 # formula for how to save downloaded videos to disk

@@ -24,8 +24,11 @@ def load_and_check(file_path, hp):
     # these should hold on maestro, but might be too strict for youtube/JMS?
     # if so, we'll have to think about how to handle the failures
     info = torchaudio.info(file_path)
-    assert info.sample_rate == 44100 or info.sample_rate == 48000
-    assert info.num_channels == 1 or info.num_channels == 2
+
+    if not (info.sample_rate == 44100 or info.sample_rate == 48000):
+        raise Exception(f"{file_path} failed sample rate sanity check: {info.sample_rate}")
+    if not (info.num_channels == 1 or info.num_channels == 2):
+        raise Exception(f"{file_path} failed channel count sanity check: {info.num_channels}")
     
     waveform, sample_rate = torchaudio.load(file_path)
 
@@ -364,10 +367,11 @@ def recursively_find_files_in_dir(dir):
 
     result = []
     for dirpath, dirnames, filenames in os.walk(dir):
-        result.append(os.path.join(dirpath, file))
+        for file in filenames:
+            result.append(os.path.join(dirpath, file))
     return result
 
-def is_file_wav(filename):
+def is_wav_file(filename):
     """
     filename: string
 
@@ -391,7 +395,7 @@ def get_training_files():
         files = ["lig_orchestra.wav", "lig_vocals.wav", "myshot.wav"]
         return [os.path.join(search_dir, f) for f in files]
 
-    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy"
+    search_dir = "/z/atrom/datasets/unlabeled/YouTube"
     wav_files = [f for f in recursively_find_files_in_dir(search_dir)
                  if is_wav_file(f)]
 
@@ -411,7 +415,7 @@ def get_validation_files():
         files = ["lig_soundtrack.wav", "all-star.wav"]
         return [os.path.join(search_dir, f) for f in files]
     
-    search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy"
+    search_dir = "/z/atrom/datasets/unlabeled/YouTube"
     wav_files = [f for f in recursively_find_files_in_dir(search_dir)
                  if is_wav_file(f)]
 
@@ -450,7 +454,7 @@ def get_checkpoint_file_path():
         # mark: local maddy testing. remove in the future
         return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/checkpoint"
     
-    return ""
+    return "/z/atrom/autoencoder_checkpoint"
 
 def get_demo_write_directory():
     """
@@ -464,8 +468,9 @@ def get_demo_write_directory():
     if ENABLE_MADDY_LOCAL_TESTING:
         # mark: local maddy testing. remove in the future
         return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/output_audio"
+
     
-    return ""
+    return "/z/atrom/demo-files"
 
 def main():
     hp = Hyperparameters()

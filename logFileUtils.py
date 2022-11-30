@@ -21,15 +21,26 @@ def graphLoss(logFile, everyN=100):
     batches = []
     losses = []
 
+    maxBatchN = -1
+    with open(logFile) as f:
+        for l in f.readlines():
+            if l[0].isdigit():
+                batch = int(l.split("|")[1].strip())
+                if batch > maxBatchN:
+                    maxBatchN = batch
+                else:
+                    break
+
     with open(logFile) as f:
         for l in f.readlines():
             if l[0].isdigit():
                 digitCtr += 1
 
             if l[0].isdigit() and (digitCtr % everyN == 0):
+                epoch = int(l.split("|")[0].strip())
                 batch = int(l.split("|")[1].strip()) / 3600
                 loss = float(l.split("|")[2].strip())
-                batches.append(batch)
+                batches.append((epoch * maxBatchN / 3600) + batch)
                 losses.append(loss)
 
     plt.plot(batches, losses)

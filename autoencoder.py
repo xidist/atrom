@@ -132,6 +132,8 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
 
     return loss
 
+
+
 class AutoEncoder(torch.nn.Module):
     def __init__(self, hp):
         """
@@ -149,9 +151,13 @@ class AutoEncoder(torch.nn.Module):
         self.encoder = torch.nn.Sequential(
             torch.nn.Linear(in_size + self.spec_size, 8000),
             nonlinear,
+            torch.nn.Linear(8000, 4000),
+            nonlinear
         )
 
         self.decoder = torch.nn.Sequential(
+            torch.nn.Linear(4000, 8000),
+            nonlinear
             torch.nn.Linear(8000, out_size)
         )
 
@@ -187,8 +193,8 @@ class Hyperparameters:
                  learning_rate = 1e-4,
                  weight_decay = 1e-5,
                  epochs = 10,
-                 validate_every_n = 10,
-                 e2e_every_n = 1,
+                 validate_every_n_batches = 3600,
+                 demo_every_n_epochs = 1,
                  n_mels = 128,
                  hop_length = 2000,
                  n_fft = 4000):
@@ -202,8 +208,8 @@ class Hyperparameters:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.epochs = 10
-        self.validate_every_n = 10
-        self.e2e_every_n = e2e_every_n
+        self.validate_every_n_batches = validate_every_n_batches
+        self.demo_every_n_epochs = demo_every_n_epochs
         self.n_mels = n_mels
         self.hop_length = hop_length
         self.n_fft = n_fft
@@ -273,6 +279,7 @@ def train_model(hp, auto_encoder, optimizer,
 
     valid_stats_string = ""
 
+    # loop over epochs...
     for epoch in range(starting_epoch, starting_epoch + hp.epochs):
         random.shuffle(training_file_names)
         total_loss_from_epoch = 0
@@ -286,6 +293,7 @@ def train_model(hp, auto_encoder, optimizer,
         )]
         random.shuffle(file_groups)
 
+        # loop over groups of training files...
         for file_group in file_groups:
             file_group_end = file_group + file_group_size
             file_group_end = min(file_group_end, len(training_file_names))
@@ -305,8 +313,13 @@ def train_model(hp, auto_encoder, optimizer,
                     macrobatches.append((batches[chunk_index:subscript_end],
                                          expected[chunk_index:subscript_end]))
 
+
             random.shuffle(macrobatches)
             spec_obj = hp.make_spectrogram_object()
+
+            previous_total_batches_from_epoch = total_batches_from_epoch
+
+            # loop over batches in the file group...
             for batch in macrobatches:
                 auto_encoder.train()
                 optimizer.zero_grad()
@@ -330,7 +343,15 @@ def train_model(hp, auto_encoder, optimizer,
 
                 print(training_stats_string + valid_stats_string, end="")
 
-            if epoch > 0 and epoch % hp.validate_every_n == 0:
+            should_validate = False
+            if epoch > 0:
+                a = total_batches_from_epoch / hp.validate_every_n_batches
+                b = previous_total_batches_from_epoch / hp.validate_every_n_batches
+
+                if int(a) > int(b):
+                    should_validate = True
+
+            if should_validate:
                 with torch.no_grad():
                     auto_encoder.eval()
                     valid_loss = 0
@@ -357,6 +378,8 @@ def train_model(hp, auto_encoder, optimizer,
             on_finish_epoch(epoch)
 
     return auto_encoder
+
+
 
 def recursively_find_files_in_dir(dir):
     """
@@ -472,13 +495,16 @@ def get_demo_write_directory():
     
     return "/z/atrom/demo-files"
 
+
+
 def main():
     hp = Hyperparameters()
-    hp.batch_size = 32
-    hp.epochs = 20
-    hp.learning_rate = 1e-5
     hp.left_context = 0
     hp.right_context = 0
+    hp.batch_size = 32
+    hp.learning_rate = 1e-5
+    hp.epochs = 20
+    hp.validate_every_n_batches = 3600 * 10
     auto_encoder = AutoEncoder(hp)
 
     optimizer = torch.optim.AdamW(auto_encoder.parameters(),
@@ -526,7 +552,7 @@ def main():
 
         last_epoch = n == starting_epoch + hp.epochs - 1
 
-        if last_epoch or n % hp.e2e_every_n == 0:
+        if last_epoch or n % hp.demo_every_n_epochs == 0:
             for path in get_demo_files():
                 last_path_component = os.path.basename(os.path.normpath(path))
                 dest_file = os.path.join(this_epoch_demo_directory, last_path_component)
@@ -536,6 +562,8 @@ def main():
 
         save_training(n)
 
+
+    
     train_model(hp, auto_encoder, optimizer,
                 get_training_files(), get_validation_files(),
                 starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)

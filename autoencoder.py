@@ -157,7 +157,7 @@ class AutoEncoder(torch.nn.Module):
 
         self.decoder = torch.nn.Sequential(
             torch.nn.Linear(4000, 8000),
-            nonlinear
+            nonlinear,
             torch.nn.Linear(8000, out_size)
         )
 

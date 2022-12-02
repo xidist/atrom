@@ -19,7 +19,8 @@ def graphLoss(logFile, everyN=1):
     digitCtr = 0
 
     batches = []
-    losses = []
+    train_losses = []
+    val_losses = []
 
     maxBatchN = -1
     with open(logFile) as f:
@@ -51,18 +52,22 @@ def graphLoss(logFile, everyN=1):
             if l[0].isdigit() and (digitCtr % everyN == 0):
                 epoch = int(l.split("|")[0].strip())
                 batch = int(l.split("|")[1].strip()) / 3600
-                loss = float(l.split("|")[2].strip())
+                train_loss = float(l.split("|")[2].strip())
                 batches.append((epoch * batchesPerEpoch / 3600) + batch)
-                losses.append(loss)
+                train_losses.append(train_loss)
+
+                if len(l.split("|")) > 3:
+                    val_loss = float(l.split("|")[3].strip())
+                    val_losses.append(((epoch * batchesPerEpoch / 3600) + batch, val_loss))
 
                 if epoch >= len(endOfEpochs):
-                    endOfEpochs.append((epoch, batch, loss))
+                    endOfEpochs.append((epoch, batch, train_loss))
                 else:
                     if endOfEpochs[-1][1] < batch:
-                        endOfEpochs[-1] = ((epoch, batch, loss))
+                        endOfEpochs[-1] = ((epoch, batch, train_loss))
 
         
-    plt.plot(batches, losses)
+    plt.plot(batches, train_losses)
 
     plt.plot([(e * batchesPerEpoch / 3600) + b for e, b, _ in endOfEpochs],
              [l for _, _, l in endOfEpochs],
@@ -74,6 +79,8 @@ def graphLoss(logFile, everyN=1):
 
     for i in range(nEpochs):
         plt.axvline(i * batchesPerEpoch / 3600, color="black")
+
+    plt.plot([x[0] for x in val_losses], [x[1] for x in val_losses], color="green")
 
     plt.show()
 

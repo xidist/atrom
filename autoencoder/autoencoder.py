@@ -3,102 +3,13 @@ import torchaudio
 import math
 import random
 import os
+from autoencoder_util import *
+from autoencoder_data import *
 
 torch.manual_seed(0)
 random.seed(0)
 print("finished importing modules...")
 
-def load_and_check(file_path, hp):
-    """
-    file_path: str, the path to the audio file to load
-    hp: Hyperparameters
-
-    returns: a tuple of (signal, sample_rate)
-    signal: a Tensor[sample_length] containing the audio data, in the range -1 to 1
-    sample_rate: int, the number of samples recorded each second
-
-    hp: Hyperparameters
-    """
-
-    # lets do some basic sanity checks on the file format
-    # these should hold on maestro, but might be too strict for youtube/JMS?
-    # if so, we'll have to think about how to handle the failures
-    info = torchaudio.info(file_path)
-
-    if not (info.sample_rate == 44100 or info.sample_rate == 48000):
-        raise Exception(f"{file_path} failed sample rate sanity check: {info.sample_rate}")
-    if not (info.num_channels == 1 or info.num_channels == 2):
-        raise Exception(f"{file_path} failed channel count sanity check: {info.num_channels}")
-    
-    waveform, sample_rate = torchaudio.load(file_path)
-
-    if info.num_channels == 2:
-        waveform = torch.sum(waveform, dim=0)
-
-    # squeeze out the channel dimension, since it's already mono
-    waveform = waveform.squeeze()
-    waveform = waveform.to(hp.device)
-
-    if info.sample_rate != hp.sample_rate:
-        waveform = torchaudio.functional.resample(waveform, sample_rate, hp.sample_rate)
-    
-    return waveform, sample_rate
-
-
-def make_batches(signal, hp):
-    """
-    signal: Tensor[frame_length] containing the audio data
-    hp: Hyperparameters
-    returns: Tensor[batch_size x (left_context + source + right_context)].
-             A tensor of batches, where each batch is a contiguous slice of audio data. 
-             May be left or right padded with zeros at its ends
-    """
-    source_start_times = torch.arange(start=0, end=signal.shape[0], step=hp.batch_offset, dtype=int)
-    
-    signal = torch.nn.functional.pad(signal, (hp.left_context, hp.source + hp.right_context),
-                                     "constant", 0)
-    subscript_length = hp.left_context + hp.source + hp.right_context
-
-    # make a [batch x subscript_length] tensor for indexing signal
-    indices = torch.arange(start=0, end=subscript_length, step=1, dtype=int)
-    indices = indices.unsqueeze(0).repeat(source_start_times.shape[0], 1)
-    # make a [batch x subscript_length] tensor for shifting indices
-    offset = source_start_times.unsqueeze(1).repeat(1, subscript_length)
-    # add source_start_times[i] to each indices[i]
-    indices += offset
-
-    return signal[indices]
-
-def make_expected_from_batches(batches, hp):
-    """
-    batches: Tensor[batch_count x left_context + source + right_context]. Audio signals
-             for the autoencoder to reproduce
-    hp: Hyperparameters
-
-    returns: Tensor[batch_count x source]. The center slice of each batch we want
-             the autoencoder to reproduce
-    """
-    # make a [source] tensor for subscripting batches
-    indices = torch.arange(start=0, end=hp.source, step=1, dtype=int) + hp.left_context
-
-    result =  batches[:, indices]
-    return result
-
-def put_inference_inside_batches(batches, inference, hp):
-    """
-    batches: Tensor[batch_count x left_context + source + right_context]. Audio signals
-             for the autoencoder to reproduce
-    inference: Tensor[batch_count x source]. The audio signal the autoencoder actually reproduced
-    hp: Hyperparameters
-
-    returns: Tensor[batch_count x left_context + source + right_context]. A copy of batches,
-             with the source samples replaced with the contents of inference
-    """
-    b_copy = batches.clone()
-    # make a [source] tensor for subscripting b_copy
-    indices = torch.arange(start=0, end=hp.source, step=1, dtype=int) + hp.left_context
-    b_copy[:, indices] = inference
-    return b_copy
 
 def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
     """
@@ -133,7 +44,6 @@ def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
     return loss
 
 
-
 class AutoEncoder(torch.nn.Module):
     def __init__(self, hp):
         """
@@ -150,14 +60,10 @@ class AutoEncoder(torch.nn.Module):
 
         self.encoder = torch.nn.Sequential(
             torch.nn.Linear(in_size + self.spec_size, 8000),
-            nonlinear,
-            torch.nn.Linear(8000, 4000),
             nonlinear
         )
 
         self.decoder = torch.nn.Sequential(
-            torch.nn.Linear(4000, 8000),
-            nonlinear,
             torch.nn.Linear(8000, out_size)
         )
 
@@ -179,57 +85,6 @@ class AutoEncoder(torch.nn.Module):
         return x
 
 
-class Hyperparameters:
-    """
-    Bag of hyperparameters that need to be passed around at times
-    """
-    def __init__(self,
-                 sample_rate = 16000,
-                 left_context = 16000,
-                 source = 16000,
-                 right_context = 16000,
-                 batch_offset = 16000,
-                 batch_size = 8,
-                 learning_rate = 1e-4,
-                 weight_decay = 1e-5,
-                 epochs = 10,
-                 validate_every_n_batches = 3600,
-                 demo_every_n_epochs = 1,
-                 n_mels = 128,
-                 hop_length = 2000,
-                 n_fft = 4000):
-
-        self.sample_rate = sample_rate
-        self.left_context = left_context
-        self.source = source
-        self.right_context = right_context
-        self.batch_offset = batch_offset
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-        self.epochs = 10
-        self.validate_every_n_batches = validate_every_n_batches
-        self.demo_every_n_epochs = demo_every_n_epochs
-        self.n_mels = n_mels
-        self.hop_length = hop_length
-        self.n_fft = n_fft
-
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        if torch.cuda.is_available():
-            print("Using CUDA acceleration!")
-
-    def make_spectrogram_object(self):
-        """
-        Makes a MelSpectrogram module
-        """
-        return torchaudio.transforms.MelSpectrogram(
-            sample_rate=self.sample_rate,
-            n_fft=self.n_fft,
-            win_length=self.n_fft,
-            hop_length=self.hop_length,
-            n_mels=self.n_mels,
-            window_fn=torch.hann_window,
-            normalized=True).to(self.device)
 
 def end_to_end(model, hp, source_file, dest_file):
     """
@@ -378,123 +233,6 @@ def train_model(hp, auto_encoder, optimizer,
             on_finish_epoch(epoch)
 
     return auto_encoder
-
-
-
-def recursively_find_files_in_dir(dir):
-    """
-    dir: string. The root directory to search at
-    
-    returns: list[string]. Each path starts with `dir`
-    """
-
-    result = []
-    for dirpath, dirnames, filenames in os.walk(dir):
-        for file in filenames:
-            result.append(os.path.join(dirpath, file))
-    return result
-
-def is_wav_file(filename):
-    """
-    filename: string
-
-    returns: bool. True if the file has a .wav extension, and False otherwise
-    """
-    return os.path.splitext(filename)[1] == ".wav"
-
-ENABLE_MADDY_LOCAL_TESTING = False
-
-def get_training_files():
-    """
-    Get the list of names of files to use for training
-
-    returns: list[string]. each path should be either an absolute path,
-             or relative to the current working directory
-    """
-
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
-        files = ["lig_orchestra.wav", "lig_vocals.wav", "myshot.wav"]
-        return [os.path.join(search_dir, f) for f in files]
-
-    search_dir = "/z/atrom/datasets/unlabeled/YouTube"
-    wav_files = [f for f in recursively_find_files_in_dir(search_dir)
-                 if is_wav_file(f)]
-
-    return wav_files[:int(len(wav_files) * 7 / 10)]
-    
-def get_validation_files():
-    """
-    Get the list of names of files to use for validation
-
-    returns: list[string]. each path should be either an absolute path,
-             or relative to the current working directory
-    """
-
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
-        files = ["lig_soundtrack.wav", "all-star.wav"]
-        return [os.path.join(search_dir, f) for f in files]
-    
-    search_dir = "/z/atrom/datasets/unlabeled/YouTube"
-    wav_files = [f for f in recursively_find_files_in_dir(search_dir)
-                 if is_wav_file(f)]
-
-    return wav_files[int(len(wav_files) * 7 / 10) :
-                     int(len(wav_files) * 85 / 100)]
-
-
-def get_demo_files():
-    """
-    Get the list of names of files to use for demoing. Every so often,
-    the program will pass each demo file through the autoencoder,
-    saving the output audio to disk (i.e. for humans to qualitatively
-    assess training progress). For the most accurate assessment,
-    only use files in the validation set. 
-
-    returns: list[string]. each path should be either an absolute path,
-             or relative to the current working directory
-    """
-    
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        return get_training_files() + get_validation_files()
-
-    val = get_validation_files()
-    return val[::int(len(val) / 20)]
-
-def get_checkpoint_file_path():
-    """,
-    Get the name of the file to use for saving and resuming training
- 
-    returns: string. the path should be either an absolute path,
-             or relative to the current working directory
-    """
-
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/checkpoint"
-    
-    return "/z/atrom/autoencoder_checkpoint"
-
-def get_demo_write_directory():
-    """
-    Get the name of the directory to put reconstructed demo files in. (Demo files
-    will be put into subdirectories based on the epoch after they were created)
-
-    returns: string. the path should be either an absolute path,
-             or relative to the current working directory
-    """
-
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/output_audio"
-
-    
-    return "/z/atrom/demo-files"
-
 
 
 def main():

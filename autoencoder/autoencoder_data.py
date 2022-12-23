@@ -1,6 +1,8 @@
 import torch
 import torchaudio
 import os
+from config.config import *
+
 
 def load_and_check(file_path, hp):
     """
@@ -153,3 +155,9 @@ def get_demo_write_directory():
 
     
     return "/z/atrom/demo-files"
+
+
+
+
+
+

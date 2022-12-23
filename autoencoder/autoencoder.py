@@ -3,8 +3,9 @@ import torchaudio
 import math
 import random
 import os
-from autoencoder_util import *
-from autoencoder_data import *
+from .autoencoder_util import *
+from .autoencoder_data import *
+from config.config import *
 
 torch.manual_seed(0)
 random.seed(0)
@@ -307,4 +308,4 @@ def main():
                 starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)
 
 
-main()
+

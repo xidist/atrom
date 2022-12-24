@@ -5,6 +5,7 @@ import json
 import inspect
 import config.config
 import argparse
+import autoencoder.autoencoder
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -20,7 +21,7 @@ if __name__ == "__main__":
         config.config.hacky_write_data_files()
         exit()
 
-    
+    autoencoder.autoencoder.main()
 
     
 

@@ -191,7 +191,7 @@ def read_data_file(config_json_path: list[str]) -> list[str]:
     returns: the contents (split by newlines) read from disk
     """
     with open(read_config_value(config_json_path)) as f:
-        return f.readlines()
+        return f.read().splitlines()
 
 def read_config_value(config_json_path: list[str]) -> str:
     """

@@ -49,4 +49,6 @@ for url in playlistUrls:
     args += [url]
 
     subprocess.run(args)
+    
+    print("Finished")
 

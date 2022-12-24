@@ -11,37 +11,16 @@ torch.manual_seed(0)
 random.seed(0)
 print("finished importing modules...")
 
-
-def compute_autoencoder_loss(batches, expected, inference, spec_objs, hp):
+def compute_autoencoder_loss(expected, inference, hp):
     """
-    batches: Tensor[batch_count x left_context + source + right_context]. Raw audio signal
-    expected: Tensor[batch_count x source]
-    inference: Tensor[batch_count x source]
-    spec_objs: A list of objects capable of computing a spectrogram. 
-               The MSE will be computed using each spectrogram object, comparing the 
-               spectrogram between using batches, and the spectrogram putting inference
-               in the middle of batches
+    expected: Tensor[batch_count x example_size]
+    inference: Tensor[batch_count x example_size]
     hp: Hyperparameters
 
     returns: float. The loss of the autoencoder
     """
 
-    # note: if inference is drawn from a normal distribution,
-    # loss from wave-to-wave comparison is 1,
-    # and loss from spectrogram comparison is 158.
-    # do we need to find a way to balance these to the same order of magnitude?
-
     loss = torch.nn.functional.mse_loss(inference, expected)
-    batches_with_inference = put_inference_inside_batches(batches, inference, hp)
-    
-    for spec_obj in spec_objs:
-        inf_spec = spec_obj(batches_with_inference)
-        exp_spec = spec_obj(batches)
-        loss += torch.nn.functional.mse_loss(inf_spec, exp_spec) / 10000
-
-    # mse averages over the batches, but we don't want to
-    loss *= batches.shape[0]
-
     return loss
 
 
@@ -55,36 +34,67 @@ class AutoEncoder(torch.nn.Module):
         self.hp = hp
         nonlinear = torch.nn.LeakyReLU()
 
-        in_size = hp.left_context + hp.source + hp.right_context
-        out_size = hp.source
-        self.spec_size = hp.n_mels * (1 + math.floor(in_size / hp.hop_length))
+        self.spec_out_time = 1 + int(hp.example_size / hp.hop_length)
+        self.spec_out_height = 1 + (hp.n_fft // 2)
+        self.d_model = int(math.ceil(self.spec_out_height / 8) * 8)
 
+        transformer_layer = torch.nn.TransformerEncoderLayer(
+            d_model = self.d_model,
+            nhead = hp.transformer_nhead,
+            batch_first = True,
+        )
+
+        
         self.encoder = torch.nn.Sequential(
-            torch.nn.Linear(in_size + self.spec_size, 8000),
+            torch.nn.TransformerEncoder(
+                transformer_layer,
+                num_layers = hp.transformer_num_layers
+            ),
+
+            torch.nn.Flatten(start_dim = 1, end_dim = -1),
+            torch.nn.Linear(self.spec_out_time * self.d_model,
+                            8000),
             nonlinear
         )
 
         self.decoder = torch.nn.Sequential(
-            torch.nn.Linear(8000, out_size)
+            torch.nn.Linear(8000,
+                            self.spec_out_time * self.d_model),
+            nonlinear,
+            torch.nn.Unflatten(1, (self.spec_out_time, self.d_model)),
+            
+            torch.nn.TransformerEncoder(
+                transformer_layer,
+                num_layers = hp.transformer_num_layers
+            )
         )
 
 
-    def forward(self, x, spec_obj):
+    def forward(self, x):
         """
-        x: Tensor[batch_count x left_context + source + right_context]
-        spec_obj: An object to use to first compute the spectrogram
+        x: Tensor[batch_count x unzipped_spectrogram_size]
 
-        returns: Tensor[batch_count x source]
+        returns: Tensor[batch_count x unzipped_spectrogram_size]
         """
 
-        s = spec_obj(x)
-        s = s.reshape(s.shape[0], -1)
-        x = torch.cat((x, s), dim=1)
+        # TransformerEncoder takes input with the shape [N x S x E],
+        # where N is batch size, S is sequence length, E is embedding/feature dimension
+        # but the spectrogram outputs [batch x freq x time]
+
+        x = x.permute(0, 2, 1)
+        # pad up x
+        x = torch.nn.functional.pad(x, (0, self.d_model - self.spec_out_height),
+                                    "constant", 0)
+
         x = self.encoder(x)
         x = self.decoder(x)
 
-        return x
+        # unpad x
+        x = x[:, :, 0 : self.spec_out_height]
 
+        x = x.permute(0, 2, 1)
+
+        return x
 
 
 def end_to_end(model, hp, source_file, dest_file):
@@ -99,11 +109,12 @@ def end_to_end(model, hp, source_file, dest_file):
     """
     model.eval()
     signal, sample_rate = load_and_check(source_file, hp)
-    spec_obj = hp.make_spectrogram_object()
     batches = make_batches(signal, hp)
-    inference = model(batches, spec_obj)
+    inference = model(batches)
+    inference = reconstruct_waveform(inference, hp)
     inference = inference.reshape(-1)
     inference = inference.unsqueeze(0)
+
 
     out_sample_rate = 44100
     inference = torchaudio.functional.resample(inference, hp.sample_rate, out_sample_rate)
@@ -158,7 +169,6 @@ def train_model(hp, auto_encoder, optimizer,
             for file_name in training_file_names[file_group : file_group_end]:
                 signal, sample_rate = load_and_check(file_name, hp)
                 batches = make_batches(signal, hp)
-                expected = make_expected_from_batches(batches, hp)
 
                 chunk_indices = [hp.batch_size * i for i in range(
                     int(math.ceil(batches.shape[0] / hp.batch_size))
@@ -166,12 +176,10 @@ def train_model(hp, auto_encoder, optimizer,
                 for chunk_index in chunk_indices:
                     subscript_end = chunk_index + hp.batch_size
                     subscript_end = min(batches.shape[0], subscript_end)
-                    macrobatches.append((batches[chunk_index:subscript_end],
-                                         expected[chunk_index:subscript_end]))
+                    macrobatches.append(batches[chunk_index:subscript_end])
 
 
             random.shuffle(macrobatches)
-            spec_obj = hp.make_spectrogram_object()
 
             previous_total_batches_from_epoch = total_batches_from_epoch
 
@@ -179,11 +187,10 @@ def train_model(hp, auto_encoder, optimizer,
             for batch in macrobatches:
                 auto_encoder.train()
                 optimizer.zero_grad()
-                x = batch[0]
-                y = batch[1]
-                inference = auto_encoder(x, spec_obj)
-                spec_objs = []
-                loss = compute_autoencoder_loss(x, y, inference, spec_objs, hp)
+                x = batch
+                y = batch
+                inference = auto_encoder(x)
+                loss = compute_autoencoder_loss(y, inference, hp)
 
                 loss.backward()
                 optimizer.step()
@@ -200,7 +207,7 @@ def train_model(hp, auto_encoder, optimizer,
                 print(training_stats_string + valid_stats_string, end="")
 
             should_validate = False
-            if epoch > 0:
+            if epoch > 0 or total_batches_from_epoch > 0:
                 a = total_batches_from_epoch / hp.validate_every_n_batches
                 b = previous_total_batches_from_epoch / hp.validate_every_n_batches
 
@@ -215,13 +222,10 @@ def train_model(hp, auto_encoder, optimizer,
                     for valid_file in validation_file_names:
                         signal, sample_rate = load_and_check(valid_file, hp)
                         batches = make_batches(signal, hp)
-                        expected = make_expected_from_batches(batches, hp)
-                        inference = auto_encoder(batches, spec_obj)
-                        spec_objs = []
-                        valid_loss += compute_autoencoder_loss(batches,
-                                                               expected,
+                        inference = auto_encoder(batches)
+                        valid_loss += compute_autoencoder_loss(expected,
                                                                inference,
-                                                               spec_objs, hp)
+                                                               hp)
                         valid_denom += batches.shape[0]
 
                         if valid_denom != 0:
@@ -238,8 +242,6 @@ def train_model(hp, auto_encoder, optimizer,
 
 def main():
     hp = Hyperparameters()
-    hp.left_context = 0
-    hp.right_context = 0
     hp.batch_size = 32
     hp.learning_rate = 1e-5
     hp.epochs = 20
@@ -302,7 +304,6 @@ def main():
         save_training(n)
 
 
-    
     train_model(hp, auto_encoder, optimizer,
                 get_training_files(), get_validation_files(),
                 starting_epoch=starting_epoch, on_finish_epoch=on_finish_epoch)

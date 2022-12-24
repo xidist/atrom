@@ -25,6 +25,7 @@ def make_batches(signal, hp):
 
     return signal[indices]
 
+
 def make_expected_from_batches(batches, hp):
     """
     batches: Tensor[batch_count x left_context + source + right_context]. Audio signals
@@ -39,6 +40,7 @@ def make_expected_from_batches(batches, hp):
 
     result =  batches[:, indices]
     return result
+
 
 def put_inference_inside_batches(batches, inference, hp):
     """
@@ -55,7 +57,6 @@ def put_inference_inside_batches(batches, inference, hp):
     indices = torch.arange(start=0, end=hp.source, step=1, dtype=int) + hp.left_context
     b_copy[:, indices] = inference
     return b_copy
-
 
 
 class Hyperparameters:
@@ -97,6 +98,7 @@ class Hyperparameters:
         if torch.cuda.is_available():
             print("Using CUDA acceleration!")
 
+            
     def make_spectrogram_object(self):
         """
         Makes a MelSpectrogram module

@@ -1,7 +1,7 @@
 import torch
 import torchaudio
 import os
-from config.config import *
+import config.config
 
 
 def load_and_check(file_path, hp):
@@ -41,30 +41,6 @@ def load_and_check(file_path, hp):
     return waveform, sample_rate
 
 
-
-def recursively_find_files_in_dir(dir):
-    """
-    dir: string. The root directory to search at
-    
-    returns: list[string]. Each path starts with `dir`
-    """
-
-    result = []
-    for dirpath, dirnames, filenames in os.walk(dir):
-        for file in filenames:
-            result.append(os.path.join(dirpath, file))
-    return result
-
-def is_wav_file(filename):
-    """
-    filename: string
-
-    returns: bool. True if the file has a .wav extension, and False otherwise
-    """
-    return os.path.splitext(filename)[1] == ".wav"
-
-ENABLE_MADDY_LOCAL_TESTING = False
-
 def get_training_files():
     """
     Get the list of names of files to use for training
@@ -72,19 +48,9 @@ def get_training_files():
     returns: list[string]. each path should be either an absolute path,
              or relative to the current working directory
     """
+    return config.config.read_data_file(["autoencoder", "train"])
 
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
-        files = ["lig_orchestra.wav", "lig_vocals.wav", "myshot.wav"]
-        return [os.path.join(search_dir, f) for f in files]
 
-    search_dir = "/z/atrom/datasets/unlabeled/YouTube"
-    wav_files = [f for f in recursively_find_files_in_dir(search_dir)
-                 if is_wav_file(f)]
-
-    return wav_files[:int(len(wav_files) * 7 / 10)]
-    
 def get_validation_files():
     """
     Get the list of names of files to use for validation
@@ -92,19 +58,7 @@ def get_validation_files():
     returns: list[string]. each path should be either an absolute path,
              or relative to the current working directory
     """
-
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        search_dir = "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/input_audio"
-        files = ["lig_soundtrack.wav", "all-star.wav"]
-        return [os.path.join(search_dir, f) for f in files]
-    
-    search_dir = "/z/atrom/datasets/unlabeled/YouTube"
-    wav_files = [f for f in recursively_find_files_in_dir(search_dir)
-                 if is_wav_file(f)]
-
-    return wav_files[int(len(wav_files) * 7 / 10) :
-                     int(len(wav_files) * 85 / 100)]
+    return config.config.read_data_file(["autoencoder", "validation"])
 
 
 def get_demo_files():
@@ -118,13 +72,9 @@ def get_demo_files():
     returns: list[string]. each path should be either an absolute path,
              or relative to the current working directory
     """
-    
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        return get_training_files() + get_validation_files()
 
-    val = get_validation_files()
-    return val[::int(len(val) / 20)]
+    return config.config.read_data_file(["autoencoder", "demo"])
+
 
 def get_checkpoint_file_path():
     """,
@@ -134,11 +84,8 @@ def get_checkpoint_file_path():
              or relative to the current working directory
     """
 
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/checkpoint"
-    
-    return "/z/atrom/autoencoder_checkpoint"
+    return config.config.read_config_value(["autoencoder", "checkpoint"])
+
 
 def get_demo_write_directory():
     """
@@ -149,12 +96,7 @@ def get_demo_write_directory():
              or relative to the current working directory
     """
 
-    if ENABLE_MADDY_LOCAL_TESTING:
-        # mark: local maddy testing. remove in the future
-        return "/Users/msa/Desktop/Penn/Fall 2022/CIS 4000/foobar-maddy/output_audio"
-
-    
-    return "/z/atrom/demo-files"
+    return config.config.read_config_value(["autoencoder", "demo_write"])
 
 
 

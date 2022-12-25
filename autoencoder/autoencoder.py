@@ -162,13 +162,18 @@ def train_model(hp, auto_encoder, optimizer,
 
         # loop over groups of training files...
         for file_group in file_groups:
+            print("starting file group...")
             file_group_end = file_group + file_group_size
             file_group_end = min(file_group_end, len(training_file_names))
 
             macrobatches = []
+            print("cleared macrobatches...")
             for file_name in training_file_names[file_group : file_group_end]:
                 signal, sample_rate = load_and_check(file_name, hp)
+                print(f"loaded {file_name}")
                 batches = make_batches(signal, hp)
+                del signal
+                print(f"made batches from {file_name}")
 
                 chunk_indices = [hp.batch_size * i for i in range(
                     int(math.ceil(batches.shape[0] / hp.batch_size))
@@ -177,9 +182,12 @@ def train_model(hp, auto_encoder, optimizer,
                     subscript_end = chunk_index + hp.batch_size
                     subscript_end = min(batches.shape[0], subscript_end)
                     macrobatches.append(batches[chunk_index:subscript_end])
-
+                del batches
+                del chunk_indices
 
             random.shuffle(macrobatches)
+
+            print("shuffled macrobatches")
 
             previous_total_batches_from_epoch = total_batches_from_epoch
 
@@ -187,15 +195,17 @@ def train_model(hp, auto_encoder, optimizer,
             for batch in macrobatches:
                 auto_encoder.train()
                 optimizer.zero_grad()
-                x = batch
-                y = batch
-                inference = auto_encoder(x)
-                loss = compute_autoencoder_loss(y, inference, hp)
+                inference = auto_encoder(batch)
+                loss = compute_autoencoder_loss(batch, inference, hp)
 
                 loss.backward()
                 optimizer.step()
                 total_loss_from_epoch += float(loss)
-                total_batches_from_epoch += x.shape[0]
+                total_batches_from_epoch += int(batch.shape[0])
+
+                del inference
+                del batch
+                del loss
 
                 # print out current training stats, and validate occasionally
                 training_stats_string = (
@@ -206,6 +216,7 @@ def train_model(hp, auto_encoder, optimizer,
 
                 print(training_stats_string + valid_stats_string, end="")
 
+            del macrobatches
             should_validate = False
             if epoch > 0 or total_batches_from_epoch > 0:
                 a = total_batches_from_epoch / hp.validate_every_n_batches
@@ -215,6 +226,7 @@ def train_model(hp, auto_encoder, optimizer,
                     should_validate = True
 
             if should_validate:
+                print("validating...")
                 with torch.no_grad():
                     auto_encoder.eval()
                     valid_loss = 0
@@ -226,11 +238,15 @@ def train_model(hp, auto_encoder, optimizer,
                         valid_loss += float(compute_autoencoder_loss(expected,
                                                                      inference,
                                                                      hp))
-                        valid_denom += batches.shape[0]
+                        valid_denom += int(batches.shape[0])
 
                         if valid_denom != 0:
                             valid_stats_string = f"| {valid_loss / valid_denom}"
                             print(training_stats_string + valid_stats_string, end="")
+
+                        del signal
+                        del batches
+                        del inference
 
 
         print("")

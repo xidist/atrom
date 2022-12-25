@@ -194,7 +194,7 @@ def train_model(hp, auto_encoder, optimizer,
 
                 loss.backward()
                 optimizer.step()
-                total_loss_from_epoch += loss
+                total_loss_from_epoch += float(loss)
                 total_batches_from_epoch += x.shape[0]
 
                 # print out current training stats, and validate occasionally
@@ -223,9 +223,9 @@ def train_model(hp, auto_encoder, optimizer,
                         signal, sample_rate = load_and_check(valid_file, hp)
                         batches = make_batches(signal, hp)
                         inference = auto_encoder(batches)
-                        valid_loss += compute_autoencoder_loss(expected,
-                                                               inference,
-                                                               hp)
+                        valid_loss += float(compute_autoencoder_loss(expected,
+                                                                     inference,
+                                                                     hp))
                         valid_denom += batches.shape[0]
 
                         if valid_denom != 0:

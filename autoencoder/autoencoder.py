@@ -161,19 +161,16 @@ def train_model(hp, auto_encoder, optimizer,
         random.shuffle(file_groups)
 
         # loop over groups of training files...
-        for file_group in file_groups:
-            print("starting file group...")
+        for file_groups_index, file_group in enumerated(file_groups):
+            print(f"starting file group {file_groups_index + 1} of {len(file_groups}")
             file_group_end = file_group + file_group_size
             file_group_end = min(file_group_end, len(training_file_names))
 
             macrobatches = []
-            print("cleared macrobatches...")
             for file_name in training_file_names[file_group : file_group_end]:
                 signal, sample_rate = load_and_check(file_name, hp)
-                print(f"loaded {file_name}")
                 batches = make_batches(signal, hp)
                 del signal
-                print(f"made batches from {file_name}")
 
                 chunk_indices = [hp.batch_size * i for i in range(
                     int(math.ceil(batches.shape[0] / hp.batch_size))
@@ -187,7 +184,6 @@ def train_model(hp, auto_encoder, optimizer,
 
             random.shuffle(macrobatches)
 
-            print("shuffled macrobatches")
 
             previous_total_batches_from_epoch = total_batches_from_epoch
 

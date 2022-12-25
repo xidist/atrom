@@ -61,10 +61,10 @@ def _is_wav_file(filename):
     return os.path.splitext(filename)[1] == ".wav"
 
 
-def _write_data_file(config_json_path: list[str], lines: list[str]):
+def _write_data_file(config_json_path, lines):
     """
-    config_json_path: the keys to determine the type of data file
-    lines: the data (joined by newlines) to write to disk
+    config_json_path: list[str]. the keys to determine the type of data file
+    lines: list[str]. the data (joined by newlines) to write to disk
     """
     with open(read_config_value(config_json_path), "w") as f:
         f.write("\n".join(lines))
@@ -78,11 +78,17 @@ def _make_autoencoder_train_file():
         files = [os.path.join(search_dir, f) for f in files]
 
     elif socket.gethostname() == "memstar":
-        search_dir = "/z/atrom/datasets/unabeled/YouTube"
+        search_dir = "/z/atrom/datasets/unlabeled/YouTube"
         files = [f for f in _recursively_find_files_in_dir(search_dir)
                  if _is_wav_file(f)]
         files = files[:int(len(files) * 7 / 10)]
 
+    elif socket.gethostname() == "qubit1":
+        search_dir = "/home/m20adams/atrom/datasets/unlabeled/YouTube"
+        files = [f for f in _recursively_find_files_in_dir(search_dir)
+                 if _is_wav_file(f)]
+        files = files[:int(len(files) * 7 / 10)]
+        
     _write_data_file(["autoencoder", "train"], files)
 
 
@@ -94,7 +100,14 @@ def _make_autoencoder_validation_file():
         files = [os.path.join(search_dir, f) for f in files]
 
     elif socket.gethostname() == "memstar":
-        search_dir = "/z/atrom/datasets/unabeled/YouTube"
+        search_dir = "/z/atrom/datasets/unlabeled/YouTube"
+        files = [f for f in _recursively_find_files_in_dir(search_dir)
+                 if _is_wav_file(f)]
+        files = files[int(len(files) * 7 / 10) :
+                      int(len(files) * 85 / 100)]
+
+    elif socket.gethostname() == "qubit1":
+        search_dir = "/home/m20adams/atrom/datasets/unlabeled/YouTube"
         files = [f for f in _recursively_find_files_in_dir(search_dir)
                  if _is_wav_file(f)]
         files = files[int(len(files) * 7 / 10) :
@@ -112,12 +125,21 @@ def _make_autoencoder_demo_file():
         files = [os.path.join(search_dir, f) for f in files]
 
     elif socket.gethostname() == "memstar":
-        search_dir = "/z/atrom/datasets/unabeled/YouTube"
+        search_dir = "/z/atrom/datasets/unlabeled/YouTube"
         files = [f for f in _recursively_find_files_in_dir(search_dir)
                  if _is_wav_file(f)]
         files = files[int(len(files) * 7 / 10) :
                       int(len(files) * 85 / 100)]
         files = files[::int(len(files) / 20)]
+
+    elif socket.gethostname() == "qubit1":
+        search_dir = "/home/m20adams/atrom/datasets/unlabeled/YouTube"
+        files = [f for f in _recursively_find_files_in_dir(search_dir)
+                 if _is_wav_file(f)]
+        files = files[int(len(files) * 7 / 10) :
+                      int(len(files) * 85 / 100)]
+        files = files[::int(len(files) / 20)]
+
 
     _write_data_file(["autoencoder", "demo"], files)
 
@@ -184,18 +206,18 @@ def hacky_write_data_files():
     _make_autoencoder_demo_file()
 
 
-def read_data_file(config_json_path: list[str]) -> list[str]:
+def read_data_file(config_json_path):
     """
-    config_json_path: the keys to determine the type of data file
+    config_json_path: list[str]. the keys to determine the type of data file
     
-    returns: the contents (split by newlines) read from disk
+    returns: list[str]. the contents (split by newlines) read from disk
     """
     with open(read_config_value(config_json_path)) as f:
         return f.read().splitlines()
 
-def read_config_value(config_json_path: list[str]) -> str:
+def read_config_value(config_json_path) -> str:
     """
-    config_json_path: the keys to the value
+    config_json_path: list[str]. the keys to the value
     
     returns: the value at the end of the path
     """

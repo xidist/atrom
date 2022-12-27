@@ -194,7 +194,7 @@ def graph_loss(logFile="nohup.out", everyN=1):
     for l in lines:
         if l[0].isdigit():
             batch = int(l.split("|")[1].strip())
-            if batch > maxBatchN:
+            if batch >= maxBatchN:
                 maxBatchN = batch
             else:
                 break
@@ -218,13 +218,21 @@ def graph_loss(logFile="nohup.out", everyN=1):
         if l[0].isdigit() and (digitCtr % everyN == 0):
             epoch = int(l.split("|")[0].strip())
             batch = int(l.split("|")[1].strip()) / 3600
-            train_loss = float(l.split("|")[2].strip())
+            train_loss = float(l.split("|")[2].strip().split(" ")[0])
             batches.append((epoch * batchesPerEpoch / 3600) + batch)
             train_losses.append(train_loss)
 
             if len(l.split("|")) > 3:
-                val_loss = float(l.split("|")[3].strip())
+                # todo: remove the starting/validating hard coded strings
+                # in parsing here, once fixing autoencoder.py
+                val_loss = float(l.split("|")[3].strip().split("starting")[0].split("validating")[0])
                 val_losses.append(((epoch * batchesPerEpoch / 3600) + batch, val_loss))
+                if len(val_losses) >= 2:
+                    if val_losses[-2][1] == val_losses[-1][1]:
+                        del val_losses[-1]
+                    elif val_losses[-2][0] == val_losses[-1][0]:
+                        del val_losses[-2]
+                    
 
             if epoch >= len(endOfEpochs):
                 endOfEpochs.append((epoch, batch, train_loss))
@@ -246,6 +254,9 @@ def graph_loss(logFile="nohup.out", everyN=1):
     print("training losses at end of epochs:")
     for e, b, l in endOfEpochs:
         print(f"{e} ({b}): {l}")
+
+    for x in val_losses:
+        print(x)
     
     plt.show()
     

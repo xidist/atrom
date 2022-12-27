@@ -203,6 +203,10 @@ def train_model(hp, auto_encoder, optimizer,
                 del batch
                 del loss
 
+                # todo: stop dividing loss by batch size when logging,
+                # because MSE already averages for us and we're over correcting.
+                # or, turn MSE into sum instead of mean
+
                 # print out current training stats, and validate occasionally
                 training_stats_string = (
                     f"\r{epoch:02d}    "

@@ -231,7 +231,7 @@ def train_model(hp, auto_encoder, optimizer,
                         signal, sample_rate = load_and_check(valid_file, hp)
                         batches = make_batches(signal, hp)
                         inference = auto_encoder(batches)
-                        valid_loss += float(compute_autoencoder_loss(expected,
+                        valid_loss += float(compute_autoencoder_loss(batches,
                                                                      inference,
                                                                      hp))
                         valid_denom += int(batches.shape[0])

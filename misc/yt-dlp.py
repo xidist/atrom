@@ -21,7 +21,10 @@ playlistUrls = [
 outputNameFormula = r"%(playlist)s/%(playlist_index)s/%(title)s.%(ext)s"
 
 # directory to save videos to
-outputDirectory = "/z/atrom/datasets/unlabeled/YouTube"
+# memstar:
+# outputDirectory = "/z/atrom/datasets/unlabeled/YouTube"
+# qubit1:
+outputDirectory = "/home/m20adams/atrom/datasets/unlabeled/YouTube"
 
 # path to the archive file
 downloadArchiveFile = outputDirectory + "/download_archive.txt"
@@ -49,4 +52,6 @@ for url in playlistUrls:
     args += [url]
 
     subprocess.run(args)
+    
+print("Finished")
 

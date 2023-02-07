@@ -91,6 +91,16 @@ def _make_autoencoder_train_file():
         
     _write_data_file(["autoencoder", "train"], files)
 
+def _get_maestro_path():
+    if socket.gethostname() == "mithril.local":
+        # maddy's local machine
+        return None
+
+    elif socket.gethostname() == "memstar":
+        return "/z/atrom/datasets/labeled/maestro/maestro-v3.0.0"
+
+    elif socket.gethostname() == "qubit1":
+        return None
 
 def _make_autoencoder_validation_file():
     if socket.gethostname() == "mithril.local":
@@ -184,6 +194,9 @@ def make_config_file():
             "demo" : autoencoder_demo_file,
             "checkpoint" : autoencoder_checkpoint_file,
             "demo_write" : autoencoder_demo_write_dir
+        },
+        "toMidi" : {
+            "maestro" : _get_maestro_path()
         }
     }
 

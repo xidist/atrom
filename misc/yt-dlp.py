@@ -1,5 +1,5 @@
 # usage: to let this program keep running after logging out over ssh, run
-# `nohup python yt-dlp.py &`. stdout will redirect to `nohup.out`
+# `nohup python -u yt-dlp.py &`. stdout will redirect to `nohup.out`
 
 import subprocess
 
@@ -14,6 +14,12 @@ playlistUrls = [
     "https://www.youtube.com/playlist?list=PLetgZKHHaF-Zq1Abh-ZGC4liPd_CV3Uo4",
     "https://www.youtube.com/playlist?list=PLFYZh4cL2f0qohRXux42oPNysXzqkT3m_",
     "https://www.youtube.com/playlist?list=PLw-VjHDlEOgs658kAHR_LAaILBXb-s6Q5",
+    "https://www.youtube.com/playlist?list=PL8F6B0753B2CCA128",
+    "https://www.youtube.com/playlist?list=PLYBzQ13D7el7Z1D7ykHyCAX0fa6lsOMNy",
+    "https://www.youtube.com/playlist?list=PLAPo1R_GVX4IZGbDvUH60bOwIOnZplZzM",
+    "https://www.youtube.com/playlist?list=PLbYGZP48h5lLUSCqvU6vuarjEaQWM_dcN",
+    "https://www.youtube.com/playlist?list=PL3oW2tjiIxvQW6c-4Iry8Bpp3QId40S5S",
+    "https://www.youtube.com/playlist?list=PLw-VjHDlEOgs658kAHR_LAaILBXb-s6Q5"
 ]
 
 
@@ -22,9 +28,9 @@ outputNameFormula = r"%(playlist)s/%(playlist_index)s/%(title)s.%(ext)s"
 
 # directory to save videos to
 # memstar:
-# outputDirectory = "/z/atrom/datasets/unlabeled/YouTube"
+outputDirectory = "/z/atrom/datasets/unlabeled/YouTube"
 # qubit1:
-outputDirectory = "/home/m20adams/atrom/datasets/unlabeled/YouTube"
+# outputDirectory = "/home/m20adams/atrom/datasets/unlabeled/YouTube"
 
 # path to the archive file
 downloadArchiveFile = outputDirectory + "/download_archive.txt"

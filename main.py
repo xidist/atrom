@@ -9,6 +9,7 @@ import autoencoder.autoencoder
 import torchaudio
 import subprocess
 import matplotlib.pyplot as plt
+import toMidi.toMidi
 
 class App:
     parser = argparse.ArgumentParser()
@@ -259,6 +260,10 @@ def graph_loss(logFile="nohup.out", everyN=1):
         print(x)
     
     plt.show()
+
+@cli_accessible
+def toMidi_make_pitch_interval_files():
+    toMidi.toMidi.make_pitch_interval_files()
     
 if __name__ == "__main__":
     App.run()

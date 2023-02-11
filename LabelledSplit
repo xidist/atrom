@@ -1,4 +1,8 @@
-
+#This function takes the path of a file containing music data
+#It also takes in three ratios train ratio, Val ratio, and test_ratio for splitting the data into training, validation, and testing sets, respectively. 
+#It opens the file, reads the contents into a list, shuffles the list randomly, and then splits the data based on the ratios given. 
+#The function then writes the three sets of music data into separate files with names train_music_data.txt, val_music_data.txt, and test_music_data.txt 
+# in the same directory as the input file.
 
 import os
 import random

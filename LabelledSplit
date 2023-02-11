@@ -1,16 +1,31 @@
-import numpy as np
 
-def split_data(data, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2):
-    np.random.shuffle(data)
-    n = len(data)
+
+import os
+import random
+
+def split_music_data(file_path, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2):
+    with open(file_path, 'r') as file:
+        music_data = file.readlines()
+    
+    random.shuffle(music_data)
+    n = len(music_data)
     train_end = int(train_ratio * n)
     val_end = int((train_ratio + val_ratio) * n)
     
-    train_data = data[:train_end]
-    val_data = data[train_end:val_end]
-    test_data = data[val_end:]
+    train_data = music_data[:train_end]
+    val_data = music_data[train_end:val_end]
+    test_data = music_data[val_end:]
     
-    return train_data, val_data, test_data
-
+    train_file_path = os.path.join(os.path.dirname(file_path), 'train_music_data.txt')
+    val_file_path = os.path.join(os.path.dirname(file_path), 'val_music_data.txt')
+    test_file_path = os.path.join(os.path.dirname(file_path), 'test_music_data.txt')
     
-
+    with open(train_file_path, 'w') as train_file:
+        train_file.write('\n'.join(train_data))
+    with open(val_file_path, 'w') as val_file:
+        val_file.write('\n'.join(val_data))
+    with open(test_file_path, 'w') as test_file:
+        test_file.write('\n'.join(test_data))
+        
+        
+        

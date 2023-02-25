@@ -1,7 +1,7 @@
 import math, itertools
 
 class Tokenizer:
-    def __init__(windowSize, timeGranularity):
+    def __init__(self, windowSize, timeGranularity):
         """
         windowSize: the size of each window for tokenization, in seconds. 
             audio longer than this duration is broken up into multiple windows
@@ -16,12 +16,12 @@ class Tokenizer:
 
         self.tokenList = []
         for i in range(1, 129):
-            self.tokens.append(self.makeNoteToken(i))
-        self.tokenList.append("<ON>")
-        self.tokenList.append("<OFF>")
-        self.tokenList.append("<EOS>")
+            self.tokenList.append(self.makeNoteString(i))
+        self.tokenList.append(self.onString())
+        self.tokenList.append(self.offString())
+        self.tokenList.append(self.eosString())
         for i in range(1 + int(math.ceil(windowSize / timeGranularity))):
-            self.tokenList.append(self.makeTimeToken(i))
+            self.tokenList.append(self.makeTimeString(i))
 
     def stringToToken(self, s):
         """
@@ -40,21 +40,30 @@ class Tokenizer:
         """
         return self.tokenList[i]
 
-    def eosToken(self):
-        return self.stringToInt("<EOS>")
+    def eosString(self):
+        return "<EOS>"
 
-    def makeNoteToken(self, midiPitch):
+    def onString(self):
+        return "<ON>"
+
+    def offString(self):
+        return "<OFF>"
+
+    def makeNoteString(self, midiPitch):
         return f"<NOTE_{midiPitch}_>"
 
-    def makeTimeToken(self, t):
+    def makeTimeString(self, t):
         return f"<TIME_{t}_{self.timeGranularity}>"
 
     def detokenize(self, windows):
         """
-        windows: a list of windows, where each window is a list of integer tokens
+        windows: a list of windows, where each window is a list of string or integer tokens
 
         returns: a list of three-element tuples in pitch-interval format
         """
+        if windows and windows[0] and type(windows[0][0]) == int:
+            windows = [[self.tokenToString(x) for x in w] for w in windows]
+        
         noteStartTimes = {}
         result = []
         time = None
@@ -62,17 +71,16 @@ class Tokenizer:
             isOn = None
             foundEos = False
             for event in windows[i]:
-                s = self.tokenToString(event)
                 if event.startswith("<TIME_"):
-                    newTime = int(event.split("_")[1])
-                    newTime *= i * (self.windowSize / self.timeGranularity)
-                    if newTime <= time:
+                    newTime = int(event.split("_")[1]) * self.timeGranularity
+                    newTime += i * self.windowSize
+                    if time is not None and newTime <= time:
                         print("detokenizing error: newTime less than time")
                     else:
                         time = newTime
-                elif event == "<ON>":
+                elif event == self.onString():
                     isOn = True
-                elif event == "<OFF>":
+                elif event == self.offString():
                     isOn = False
                 elif event.startswith("<NOTE_"):
                     if time is None or isOn is None:
@@ -90,7 +98,7 @@ class Tokenizer:
                             print("detokenizing error: ending non-started note")
                         else:
                             noteStartTimes[note] = time
-                elif event == "<EOS>":
+                elif event == self.eosString():
                     if foundEos:
                         print("detokenizing error: found multiple eos")
                     foundEos = True
@@ -104,39 +112,87 @@ class Tokenizer:
             print("detokenizing error: unterminated notes")
         return result
 
-    def tokenize(self, pitchIntervals):
+    def makeWindows(self, pitchIntervals):
         """
         pitchIntervals: list of three-element tuples. 
             the first element is the midi pitch (integer from 1-128)
             the second element is the start time of the note, in seconds
             the third element is the end time of the note, in seconds
 
-        returns: list of windows, where each window is a list of integer tokens
+        returns: a list of windows, where each window is a list of three-element tuples. 
+            the first element is the quantized (integer) time of the event, measured from the start of the window
+            the second element is True iff the event is a note-on event
+            the third element is the midi pitch (integer from 1-128)
         """
         ungroupedEvents = []
         for x in pitchIntervals:
             pitch = x[0]
-            startTime = int(math.round(x[1] / self.timeGranularity))
-            endTime = int(math.round(x[2] / self.timeGranularity))
+            startTime = int(round(x[1] / self.timeGranularity))
+            endTime = int(round(x[2] / self.timeGranularity))
             ungroupedEvents.append((startTime, True, pitch))
             ungroupedEvents.append((endTime, False, pitch))
         ungroupedEvents.sort()
 
-        windows = itertools.groupby(ungroupedEvents, lambda x: int(x / (self.windowSize / self.timeGranularity)))
-        for i in range(len(windows)):
-            window = windows[i]
+        grouped = itertools.groupby(ungroupedEvents, lambda x: int(x[0] / (self.windowSize / self.timeGranularity)))
+        windows = []
+
+        for (key, v) in grouped:
+            while(len(windows)) <= key:
+                windows.append([])
+            timeCorrectedV = [(
+                x[0] % int(self.windowSize / self.timeGranularity),
+                x[1],
+                x[2]
+                ) for x in v]
+            windows[-1] = timeCorrectedV
+        return windows
+
+    def tokenize(self, pitchIntervals, toInts=True):
+        """
+        pitchIntervals: list of three-element tuples. 
+            the first element is the midi pitch (integer from 1-128)
+            the second element is the start time of the note, in seconds
+            the third element is the end time of the note, in seconds
+
+        returns: list of windows, where each window is a list of string or int tokens
+        """
+
+        windows = self.makeWindows(pitchIntervals)
+        result = []
+        for window in windows:
+            result.append([])
             time = -1
             isOn = None
 
-            windows[i] = []
             for event in window:
                 if event[0] != time:
                     time = event[0]
-                    windows[i].append(self.makeTimeToken(time))
+                    s = self.makeTimeString(time)
+                    result[-1].append(s)
                 if event[1] != isOn:
                     isOn = event[1]
-                    windows[i].append(self.stringToToken("<ON>" if isOn else "<OFF>"))
-                windows[i].append(self.makeNoteToken(event[2]))
-        return windows
-        
-        
+                    s = self.onString() if isOn else self.offString()
+                    result[-1].append(s)
+                s = self.makeNoteString(event[2])
+                result[-1].append(s)
+
+            result[-1].append(self.eosString())
+
+        if toInts:
+            result = [[self.stringToToken(s) for s in w] for w in result]
+        return result
+
+if __name__ == "__main__":
+    pitchIntervals = (
+        [
+         (60, 0, 0.5),
+         (62, 0.6, 1.2),
+         (64, 0.3, 4.5101)
+         ]
+    )
+    
+    tokenizer = Tokenizer(1, 0.05)
+    tokens = tokenizer.tokenize(pitchIntervals, toInts=False)
+    print(tokens)
+    detokens = tokenizer.detokenize(tokens)
+    print(detokens)

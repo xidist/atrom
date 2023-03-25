@@ -19,14 +19,16 @@ class Tokenizer:
             self.tokenList.append(self.makeNoteString(i))
         self.tokenList.append(self.onString())
         self.tokenList.append(self.offString())
+        self.tokenList.append(self.sosString())
         self.tokenList.append(self.eosString())
+        self.tokenList.append(self.padString())
         for i in range(1 + int(math.ceil(windowSize / timeGranularity))):
             self.tokenList.append(self.makeTimeString(i))
 
     def stringToToken(self, s):
         """
         s: the human-readable version of the token. 
-           may be a <NOTE_{}>, <ON>, <OFF>, <EOS>, or <TIME_{}> like string
+           may be a <NOTE_{}>, <ON>, <OFF>, <SOS>, <EOS>, <PAD>, or <TIME_{}> like string
         
         returns: a non-negative integer uniquely representing that token
         """
@@ -40,8 +42,23 @@ class Tokenizer:
         """
         return self.tokenList[i]
 
+    def sosString(self):
+        return "<SOS>"
+
+    def sosIndex(self):
+        return self.stringToToken(self.sosString())
+
     def eosString(self):
         return "<EOS>"
+
+    def eosIndex(self):
+        return self.stringToToken(self.eosString())
+
+    def padString(self):
+        return "<PAD>"
+
+    def padIndex(self):
+        return self.stringToToken(self.padString())
 
     def onString(self):
         return "<ON>"
@@ -70,7 +87,7 @@ class Tokenizer:
         for i in range(len(windows)):
             isOn = None
             foundEos = False
-            for event in windows[i]:
+            for eventIndex, event in enumerate(windows[i]):
                 if event.startswith("<TIME_"):
                     newTime = int(event.split("_")[1]) * self.timeGranularity
                     newTime += i * self.windowSize
@@ -102,6 +119,14 @@ class Tokenizer:
                     if foundEos:
                         print("detokenizing error: found multiple eos")
                     foundEos = True
+
+                elif event == self.sosString():
+                    if eventIndex != 0:
+                        print("detokenizing error: found extra sos")
+
+                elif event == self.padString():
+                    if not foundEos:
+                        print("detokenizing error: padding before eos")
                     
             # end of for event in windows[1]
             if not foundEos:
@@ -147,7 +172,7 @@ class Tokenizer:
             windows[-1] = timeCorrectedV
         return windows
 
-    def tokenize(self, pitchIntervals, toInts=True):
+    def tokenize(self, pitchIntervals, toInts=True, padToLength: int=100):
         """
         pitchIntervals: list of three-element tuples. 
             the first element is the midi pitch (integer from 1-128)
@@ -160,7 +185,7 @@ class Tokenizer:
         windows = self.makeWindows(pitchIntervals)
         result = []
         for window in windows:
-            result.append([])
+            result.append([self.sosString()])
             time = -1
             isOn = None
 
@@ -177,6 +202,9 @@ class Tokenizer:
                 result[-1].append(s)
 
             result[-1].append(self.eosString())
+
+            if len(result) < padToLength:
+                result[-1] += [self.padString() for _ in range(padToLength - len(result))]
 
         if toInts:
             result = [[self.stringToToken(s) for s in w] for w in result]

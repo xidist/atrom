@@ -7,6 +7,7 @@ import torch
 import torchaudio
 import math
 import random
+import timeit
 
 
 torch.manual_seed(0)
@@ -38,88 +39,129 @@ def make_pitch_interval_files():
 class Hyperparameters:
     def __init__(self,
                  clipLength: float=1,
-                 maxPredictedTokens: int=100):
+                 timeGranularity: float=0.05,
+                 maxPredictedTokens: int=100,
+                 
+                 sample_rate: int=16000,
+                 emb_size=512,
+                 nhead=8,
+                 ffn_hid_dim=512,
+                 batch_size=128,
+                 num_encoder_layers=3,
+                 num_decoder_layers=3,
+                 lr=0.0001,
+                 betas=(0.9, 0.98),
+                 eps=1e-9,
+                 num_epcochs=10):
+        
         self.clipLength = clipLength
+        self.timeGranularity = timeGranularity
         self.maxPredictedTokens = maxPredictedTokens
-
-class ToMidi(torch.nn.Module):
-    def __init__(self, hp: Hyperparameters)
-        super().__init__()
-        self.hp = hp
-
-def train_model(model: ToMidi, optimizer,
-                starting_epoch=0, on_finish_epoch=None):
-    for epoch in range(starting_epoch, starting_epoch + hp.epochs):
-        total_loss_from_epoch = 0
-        total_batches_from_epoch = 0
-        valid_stats_string = ""
         
-        raise Exception("get training files")
-        training_data = [] # [(wavBuffer, [numberTokens])]
-        random.shuffle(training_data)
-        for example_index, example in enumerate(training_data):
-            print(f"starting example {example_index + 1} of {len(training_data)}")
+        self.sample_rate = sample_rate
+        self.emb_size = emb_size
+        self.nhead = nhead
+        self.ffn_hid_dim = ffn_hid_dim
+        self.batch_size = batch_size
+        self.num_encoder_layers = num_encoder_layers
+        self.num_decoder_layers = num_decoder_layers
+        self.lr = lr
+        self.betas = betas
+        self.eps = eps
+        self.num_epochs = num_epochs
+        
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            print("Using CUDA acceleration!")
 
-            raise Exception("chopExampleIntoClips")
-            clips = chopExampleIntoClips(example) # ([clipBuffer], [clipTokens])
-            model.train()
-            optimizer.zero_grad()
-            embeded_clip_tokens = model.embedOutputTokens(clips[1])
-
-            raise Exception("teacher forcing somehow")
-            loss.backward()
-            optimizer.step()
-            total_loss_from_epoch += float(loss)
-            total_batches_from_epoch += int(len(clips[0]))
             
-            training_stats_string = (
-                f"\r{epoch:02d}    "
-                f"|  {total_batches_from_epoch}  "
-                f"|  {total_loss_from_epoch / (total_batches_from_epoch + 1)}  "
-            )
+class PositionalEncoding(nn.Module):
+    def __init__(self, emb_size: int, dropout: float, maxlen: int = 5000):
+        super(PositionalEncoding, self).__init__()
+        den = torch.exp(- torch.arange(0, emb_size, 2) * math.log(10000) / emb_size)
+        pos = torch.arange(0, maxlen).reshape(maxlen, 1)
+        pos_embedding = torch.zeros((maxlen, emb_size))
+        pos_embedding[:, 0::2] = torch.sin(pos * den)
+        pos_embedding[:, 1::2] = torch.cos(pos * den)
+        pos_embedding = pos_embedding.unsqueeze(-2)
 
-            print(training_stats_string + valid_stats_string, end="")
+        self.dropout = nn.Dropout(dropout)
+        self.register_buffer('pos_embedding', pos_embedding)
 
-            raise Exception("validate occasionally")
-            if should_validate:
-                print("validating...")
-                metrics = validate_model(model)
-                raise Exception("process metrics")
+    def forward(self, token_embedding: Tensor)
+        return self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(0)])
 
-                if valid_denom != 0:
-                    valid_stats_string = f"| {valid_loss / valid_denom}"
-                    print(training_stats_string + valid_stats_string, end="")
+class WavEmbedding(nn.Module):
+    def __init__(self, sample_length: int, frame_rate: int, emb_size: int):
+        super(WavEmbedding, self).__init__()
+        print("TODO: use wav2vec instead of ffn")
+        self.ffn = nn.Linear(sample_length, emb_size)
 
-def validate_model(model: ToMidi):
-    raise Exception("get validation files")
-    validation_data = [] # [(wavBuffer, [numberTokens])]
-    predictions = predict(model, [example[0] for example in validation_data])
-    raise Exception("evaluate_metrics")
-    metrics = evaluate_metrics(predictions, [example[1] for example in validation_data])
-    return metrics
+    def forward(self, samples: Tensor):
+        return self.ffn(samples)
 
-def predict(model: ToMidi, to_predict):
-    """
-    to_predict: [wavBuffer], where wavBuffer = [float]
-    """
-    result = []
-    for item_index, item in enumerate(to_predict):
-        print(f"starting prediction {item_index + 1} of {len(to_predict)}")
+class MidiTokenEmbedding(nn.Module):
+    def __init__(self, vocab_size: int, emb_size: int):
+        super(MidiTokenEmbedding, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, emb_size)
+        self.emb_size = emb_size
 
-        raise Exception("chopItemIntoClips")
-        clips = chopItemIntoClips(item) # [clipBuffer]
-        with torch.no_grad():
-            model.eval()
-            predictions = []
-            for clip in clips:
-                raise Exception("detect eos")
-                while len(clipPredictions) < model.hp.maxPredictedTokens and (len(clipPredictions) == 0 or clipPredictions[-1] == EOS):
-                    clipPredictions.append(model.predictNext(clip, clipPredictions))
-                predictions.append(clipPredictions)
-            result.append(predictions)
-    return result
+    def forward(self, tokens: Tensor):
+        return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
 
-        
+class Wav2MidiTokenTransformer(nn.Module):
+    def __init__(self,
+                 num_encoder_layers: int,
+                 num_decoder_layers: int,
+                 emb_size: int,
+                 nhead: int,
+                 sample_length: int,
+                 frame_rate: int,
+                 tgt_vocab_size: int,
+                 dim_feedforward: int = 512,
+                 dropout: float = 0.1):
+        super(Wav2MidiTokentransformer, self).__init__()
+        self.transformer = Transformer(d_model=emb_size,
+                                       nhead=nhead,
+                                       num_encoder_layers=num_encoder_layers,
+                                       num_decoder_layers=num_decoder_layers,
+                                       dim_feedforward=dim_feedforward,
+                                       dropout=dropout)
+        self.generator = nn.Linear(emb_size, tgt_vocab_size)
+        self.src_emb = WavEmbedding(sample_length, frame_rate, emb_size)
+        self.tgt_emb = MidiTokenEmbedding(tgt_vocab_size, emb_size)
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
+
+    def forward(self, src: Tensor, tgt: Tensor,
+                src_mask: Tensor, tgt_mask: Tensor,
+                src_padding_mask: Tensor, tgt_padding_mask: Tensor,
+                memory_key_padding_mask: Tensor):
+        src_emb = self.positional_encoding(self.src_emb(src))
+        tgt_emb = self.positional_encoding(self.tgt_emb(tgt))
+        outs = self.transformer(src_emb, tgt_emb, src_mask, tgt_mask, None,
+                                src_padding_mask, tgt_padding_mask,
+                                memory_key_padding_mask)
+        return self.generator(outs)
+
+    def encode(self, src: Tensor, src_mask: Tensor):
+        return self.transformer.encoder(self.positional_encoding(self.src_emb(src)), src_mask)
+
+    def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
+        return self.transformer.decoder(self.positional_encoding(self.tgt_emb(tgt)), memory, tgt_mask)
+
+def create_mask(src, tgt, device, tokenizer):
+    src_seq_len = src.shape[0]
+    tgt_seq_len = tgt.shape[0]
+
+    tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_seq_len)
+    src_mask = torch.zeros((src_seq_len, src_seq_len), device=device).type(torch.bool)
+
+    src_padding_mask = (src == tokenizer.padIndex()).transpose(0, 1)
+    tgt_padding_mask = (tgt == tokenizer.padIndex()).transpose(0, 1)
+    return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
+
+
+    
 """
 Training on one song: 
     chop it up into clips
@@ -138,6 +180,127 @@ Transcribing one song:
     stitch clip predictions together
 """
 
+class Main:
+    def __init__(self):
+        print("CHECK BATCH ORDER!!!")
+        self.hp = Hyperparameters()
+        self.tokenizer = Tokenizer(self.hp.clipLength, self.hp.timeGranularity)
+        self.transformer = Wav2MidiTokenTransformer(hp.num_encoder_layers,
+                                                    hp.num_decoder_layers,
+                                                    hp.emb_size,
+                                                    hp.nhead,
+                                                    hp.sample_length,
+                                                    hp.frame_rate,
+                                                    tokenizer.vocab_size,
+                                                    hp.ffn_hid_dim)
+        for p in transformer.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+        self.transformer = transformer.to(hp.device)
+        self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.padIndex())
+        self.optimizer = torch.optim.Adam(transformer.parameters, hp.lr, hp.betas, hp.eps)
+
+    def batchify(self, file_path: str):
+        (wav, pitch_intervals) = get_wav_and_pitch_intervals_for_file(file_path, sample_rate=self.hp.sample_rate)
+
+         fractional_n_batches = float(len(wav)) / self.hp.sample_length
+         n_batches = int(math.ceil(fractional_n_batches))
+         pad_amount = (n_batches * self.hp.sample_length) - len(wav)
+         
+         src = torch.nn.functional.pad(wav, (0, pad_amount), mode='constant', value=0)
+         src = torch.reshape(src, (self.hp.sample_length, -1))
+         tgt = self.tokenizer.tokenize(pitch_intervals, toInts=True, padToLength=self.hp.maxPredictedTokens)
+
+         return src, tgt
+    
+    def train_epoch(self):
+        self.model.train()
+        losses = 0
+        nBatches = 0
+
+        for training_file in get_training_files():
+            src, tgt = self.batchify(training_file)
+            nBatches += src.shape[0]
+
+            src = src.to(self.hp.device)
+            tgt = tgt.to(self.hp.device)
+
+            tgt_input = tgt[:-1, :]
+            src_mask, tgt_mask, src_padding_mask, tgt_padding_mask = create_mask(src, tgt_input, self.hp.device, self.tokenizer)
+
+            logits = self.model(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask)
+            self.optimizer.zero_grad()
+
+            tgt_out = tgt[1:, :]
+            loss = self.loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            loss.backward()
+            self.optimizer.step()
+            losses += loss.item()
+
+        return losses / nBatches
+
+    def evaluate(self): 
+        self.model.eval()
+        losses = 0
+        nBatches = 0
+
+        for validation_file in get_validation_files():
+            src, tgt = self.batchify(validation_file)
+            nBatches += src.shape[0]
+
+            src = src.to(self.hp.device)
+            tgt = tgt.to(self.hp.device)
+
+            tgt_input = tgt[:-1, :1]
+            src_mask, tgt_mask, src_padding_mask, tgt_padding_mask = create_mask(src, tgt_input, self.hp.device, self.tokenizer)
+
+            logits = self.model(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask)
+            tgt_out = tgt[1:, :]
+            loss = self.loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            losses += loss.item()
+
+        return losses / nBatches
+
+    def train(self):
+        for epoch in range(1, self.hp.num_epochs+1):
+            start_time = timeit.default_timer()
+            train_loss = self.train_epoch()
+            end_time = timeit.default_timer()
+            val_loss = self.evaluate()
+            print(f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Val loss: {val_loss:.3f}, Epoch time: {(end_time - start_time):.3f}s")
+
+     def greedy_decode(self, src, src_mask):
+         src = src.to(self.hp.device)
+         src_mask = src_mask.to(self.hp.device)
+
+         memory = self.model.encode(src, src_mask)
+         ys = torch.ones(1, 1).fill_(tokenizer.sosIndex()).type(torch.long).to(self.hp.device)
+         for i in range(self.hp.maxPredictedTokens - 1):
+             memory = memory.to(self.hp.device)
+             tgt_mask = (nn.Transformer.generate_square_subsequent_mask(ys.size(0))
+                         .type(torch.bool)).to(self.hp.device)
+             out = self.model.decode(ys, memory, tgt_mask)
+             out = out.transpose(0, 1)
+             prob = model.generator(out[:, -1])
+             _, next_token = torch.max(prob, dim=1)
+             next_token = next_token.item()
+
+             ys = toch.cat([ys,
+                            torch.ones(1, 1).type_as(src.data).fill_(next_token)], dim=0)
+             if next_token == self.tokenizer.eosIndex():
+                 break
+         return ys
+
+     def transcribe(wavData: Tensor):
+         self.model.eval()
+         src = wavData
+         num_tokens = src.shape[0]
+         src_mask = (torch.zeros(num_tokens, num_tokens)).type(torch.bool)
+         tgt_tokens = self.greedy_decode(src, src_mask).flatten()
+
+         return self.detokenizer(tgt_tokens)
+             
 
 def main():
     print("toMidi")

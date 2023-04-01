@@ -92,13 +92,20 @@ class PositionalEncoding(nn.Module):
         return self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(0)])
 
 class WavEmbedding(nn.Module):
-    def __init__(self, sample_length: int, frame_rate: int, emb_size: int):
+    def __init__(self, sample_length: int, frame_rate: int, emb_size: int,
+                 n_fft: int=4000, win_length: int=4000, hop_length: int=2000, n_mels:int = 128):
         super(WavEmbedding, self).__init__()
-        print("TODO: use wav2vec instead of ffn")
-        self.ffn = nn.Linear(sample_length, emb_size)
+        self.spectrogram = torchaudio.transforms.MelSpectrogram(
+            sample_rate=frame_rate,
+            n_fft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+            n_mels=n_mels
+        )
+        self.ffn = nn.Linear(n_mels, emb_size)
 
     def forward(self, samples: Tensor):
-        return self.ffn(samples)
+        return self.ffn(self.spectrogram(samples))
 
 class MidiTokenEmbedding(nn.Module):
     def __init__(self, vocab_size: int, emb_size: int):

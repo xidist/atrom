@@ -264,6 +264,10 @@ def graph_loss(logFile="nohup.out", everyN=1):
 @cli_accessible
 def toMidi_make_pitch_interval_files():
     toMidi.toMidi.make_pitch_interval_files()
+
+@cli_accessible
+def train_toMidi():
+    toMidi.toMidi.train_toMidi()
     
 if __name__ == "__main__":
     App.run()

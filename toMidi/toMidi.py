@@ -1,5 +1,6 @@
 from .toMidi_data import *
 from .toMidi_eval import *
+from .tokenizer import *
 import subprocess
 import os
 from config.config import *
@@ -8,6 +9,8 @@ import torchaudio
 import math
 import random
 import timeit
+from torch import nn
+from torch import Tensor
 
 
 torch.manual_seed(0)
@@ -52,13 +55,15 @@ class Hyperparameters:
                  lr=0.0001,
                  betas=(0.9, 0.98),
                  eps=1e-9,
-                 num_epcochs=10):
+                 num_epochs=10):
         
         self.clipLength = clipLength
+        self.sample_length = self.clipLength
         self.timeGranularity = timeGranularity
         self.maxPredictedTokens = maxPredictedTokens
         
         self.sample_rate = sample_rate
+        self.frame_rate = self.sample_rate
         self.emb_size = emb_size
         self.nhead = nhead
         self.ffn_hid_dim = ffn_hid_dim
@@ -88,7 +93,7 @@ class PositionalEncoding(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.register_buffer('pos_embedding', pos_embedding)
 
-    def forward(self, token_embedding: Tensor)
+    def forward(self, token_embedding: Tensor):
         return self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(0)])
 
 class WavEmbedding(nn.Module):
@@ -127,13 +132,13 @@ class Wav2MidiTokenTransformer(nn.Module):
                  tgt_vocab_size: int,
                  dim_feedforward: int = 512,
                  dropout: float = 0.1):
-        super(Wav2MidiTokentransformer, self).__init__()
-        self.transformer = Transformer(d_model=emb_size,
-                                       nhead=nhead,
-                                       num_encoder_layers=num_encoder_layers,
-                                       num_decoder_layers=num_decoder_layers,
-                                       dim_feedforward=dim_feedforward,
-                                       dropout=dropout)
+        super(Wav2MidiTokenTransformer, self).__init__()
+        self.transformer = nn.Transformer(d_model=emb_size,
+                                          nhead=nhead,
+                                          num_encoder_layers=num_encoder_layers,
+                                          num_decoder_layers=num_decoder_layers,
+                                          dim_feedforward=dim_feedforward,
+                                          dropout=dropout)
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
         self.src_emb = WavEmbedding(sample_length, frame_rate, emb_size)
         self.tgt_emb = MidiTokenEmbedding(tgt_vocab_size, emb_size)
@@ -192,37 +197,37 @@ class Main:
         print("CHECK BATCH ORDER!!!")
         self.hp = Hyperparameters()
         self.tokenizer = Tokenizer(self.hp.clipLength, self.hp.timeGranularity)
-        self.transformer = Wav2MidiTokenTransformer(hp.num_encoder_layers,
-                                                    hp.num_decoder_layers,
-                                                    hp.emb_size,
-                                                    hp.nhead,
-                                                    hp.sample_length,
-                                                    hp.frame_rate,
-                                                    tokenizer.vocab_size,
-                                                    hp.ffn_hid_dim)
-        for p in transformer.parameters():
+        self.transformer = Wav2MidiTokenTransformer(self.hp.num_encoder_layers,
+                                                    self.hp.num_decoder_layers,
+                                                    self.hp.emb_size,
+                                                    self.hp.nhead,
+                                                    self.hp.sample_length,
+                                                    self.hp.frame_rate,
+                                                    self.tokenizer.vocab_size(),
+                                                    self.hp.ffn_hid_dim)
+        for p in self.transformer.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-        self.transformer = transformer.to(hp.device)
-        self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.padIndex())
-        self.optimizer = torch.optim.Adam(transformer.parameters, hp.lr, hp.betas, hp.eps)
+        self.transformer = self.transformer.to(self.hp.device)
+        self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=self.tokenizer.padIndex())
+        self.optimizer = torch.optim.Adam(self.transformer.parameters(), self.hp.lr, self.hp.betas, self.hp.eps)
 
     def batchify(self, file_path: str):
         (wav, pitch_intervals) = get_wav_and_pitch_intervals_for_file(file_path, sample_rate=self.hp.sample_rate)
 
-         fractional_n_batches = float(len(wav)) / self.hp.sample_length
-         n_batches = int(math.ceil(fractional_n_batches))
-         pad_amount = (n_batches * self.hp.sample_length) - len(wav)
-         
-         src = torch.nn.functional.pad(wav, (0, pad_amount), mode='constant', value=0)
-         src = torch.reshape(src, (self.hp.sample_length, -1))
-         tgt = self.tokenizer.tokenize(pitch_intervals, toInts=True, padToLength=self.hp.maxPredictedTokens)
+        fractional_n_batches = float(len(wav)) / self.hp.sample_length
+        n_batches = int(math.ceil(fractional_n_batches))
+        pad_amount = (n_batches * self.hp.sample_length) - len(wav)
+        
+        src = torch.nn.functional.pad(wav, (0, pad_amount), mode='constant', value=0)
+        src = torch.reshape(src, (self.hp.sample_length, -1))
+        tgt = self.tokenizer.tokenize(pitch_intervals, toInts=True, padToLength=self.hp.maxPredictedTokens)
 
-         return src, tgt
+        return src, tgt
     
     def train_epoch(self):
-        self.model.train()
+        self.transformer.train()
         losses = 0
         nBatches = 0
 
@@ -277,37 +282,39 @@ class Main:
             val_loss = self.evaluate()
             print(f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Val loss: {val_loss:.3f}, Epoch time: {(end_time - start_time):.3f}s")
 
-     def greedy_decode(self, src, src_mask):
-         src = src.to(self.hp.device)
-         src_mask = src_mask.to(self.hp.device)
+    def greedy_decode(self, src, src_mask):
+        src = src.to(self.hp.device)
+        src_mask = src_mask.to(self.hp.device)
 
-         memory = self.model.encode(src, src_mask)
-         ys = torch.ones(1, 1).fill_(tokenizer.sosIndex()).type(torch.long).to(self.hp.device)
-         for i in range(self.hp.maxPredictedTokens - 1):
-             memory = memory.to(self.hp.device)
-             tgt_mask = (nn.Transformer.generate_square_subsequent_mask(ys.size(0))
-                         .type(torch.bool)).to(self.hp.device)
-             out = self.model.decode(ys, memory, tgt_mask)
-             out = out.transpose(0, 1)
-             prob = model.generator(out[:, -1])
-             _, next_token = torch.max(prob, dim=1)
-             next_token = next_token.item()
+        memory = self.model.encode(src, src_mask)
+        ys = torch.ones(1, 1).fill_(tokenizer.sosIndex()).type(torch.long).to(self.hp.device)
+        for i in range(self.hp.maxPredictedTokens - 1):
+            memory = memory.to(self.hp.device)
+            tgt_mask = (nn.Transformer.generate_square_subsequent_mask(ys.size(0))
+                        .type(torch.bool)).to(self.hp.device)
+            out = self.model.decode(ys, memory, tgt_mask)
+            out = out.transpose(0, 1)
+            prob = model.generator(out[:, -1])
+            _, next_token = torch.max(prob, dim=1)
+            next_token = next_token.item()
 
-             ys = toch.cat([ys,
-                            torch.ones(1, 1).type_as(src.data).fill_(next_token)], dim=0)
-             if next_token == self.tokenizer.eosIndex():
-                 break
-         return ys
+            ys = toch.cat([ys,
+                           torch.ones(1, 1).type_as(src.data).fill_(next_token)], dim=0)
+            if next_token == self.tokenizer.eosIndex():
+                break
+        return ys
 
-     def transcribe(wavData: Tensor):
-         self.model.eval()
-         src = wavData
-         num_tokens = src.shape[0]
-         src_mask = (torch.zeros(num_tokens, num_tokens)).type(torch.bool)
-         tgt_tokens = self.greedy_decode(src, src_mask).flatten()
+    def transcribe(wavData: Tensor):
+        self.model.eval()
+        src = wavData
+        num_tokens = src.shape[0]
+        src_mask = (torch.zeros(num_tokens, num_tokens)).type(torch.bool)
+        tgt_tokens = self.greedy_decode(src, src_mask).flatten()
 
-         return self.detokenizer(tgt_tokens)
+        return self.detokenizer(tgt_tokens)
              
 
-def main():
-    print("toMidi")
+def train_toMidi():
+    main = Main()
+    main.train()
+

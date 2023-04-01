@@ -25,6 +25,9 @@ class Tokenizer:
         for i in range(1 + int(math.ceil(windowSize / timeGranularity))):
             self.tokenList.append(self.makeTimeString(i))
 
+    def vocab_size(self) -> int:
+        return len(self.tokenList)
+
     def stringToToken(self, s):
         """
         s: the human-readable version of the token. 

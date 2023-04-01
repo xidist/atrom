@@ -2,6 +2,8 @@ import os
 import config.config
 import json
 import torchaudio
+import torch
+from ast import literal_eval as make_tuple
 
 def load_maestro_json():
     maestro_dir = config.config.read_config_value(["toMidi", "maestro"])
@@ -65,7 +67,7 @@ def get_wav_and_pitch_intervals_for_file(file_path: str, sample_rate = 16000):
     returns: a tuple of a 1D Tensor containing the PCM data, 
              and a list of three-element tuples from the corresponding midi file
     """
-    return (get_wave_for_file(file_path, sample_rate=sample_rate),
+    return (get_wav_for_file(file_path, sample_rate=sample_rate),
             get_pitch_intervals_for_file(file_path))
 
 def get_wav_for_file(file_path: str, sample_rate=16000):
@@ -97,9 +99,11 @@ def get_pitch_intervals_for_file(file_path: str):
 
     returns: a list of three-element tuples representing the pitch, start time, and end time of notes
     """
-    
+
     base = os.path.splitext(file_path)[0]
     file_path = base + ".txt"
     with open(file_path) as f:
         lines = f.readlines()
-    return [json.loads(l) for l in lines]
+
+    return [make_tuple(l) for l in lines]
+

@@ -175,7 +175,7 @@ class Tokenizer:
             windows[-1] = timeCorrectedV
         return windows
 
-    def tokenize(self, pitchIntervals, toInts=True, padToLength: int=100):
+    def tokenize(self, pitchIntervals, batchSize: int, toInts=True, padToLength: int=100):
         """
         pitchIntervals: list of three-element tuples. 
             the first element is the midi pitch (integer from 1-128)
@@ -206,8 +206,11 @@ class Tokenizer:
 
             result[-1].append(self.eosString())
 
-            if len(result) < padToLength:
-                result[-1] += [self.padString() for _ in range(padToLength - len(result))]
+            if len(result[-1]) < padToLength:
+                result[-1] += [self.padString() for _ in range(padToLength - len(result[-1]))]
+
+        while len(result) < batchSize:
+            result.append([self.padString() for _ in range(padToLength)])
 
         if toInts:
             result = [[self.stringToToken(s) for s in w] for w in result]

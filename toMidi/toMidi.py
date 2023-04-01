@@ -58,7 +58,7 @@ class Hyperparameters:
                  num_epochs=10):
         
         self.clipLength = clipLength
-        self.sample_length = self.clipLength
+        self.sample_length = sample_rate * clipLength
         self.timeGranularity = timeGranularity
         self.maxPredictedTokens = maxPredictedTokens
         
@@ -98,7 +98,7 @@ class PositionalEncoding(nn.Module):
 
 class WavEmbedding(nn.Module):
     def __init__(self, sample_length: int, frame_rate: int, emb_size: int,
-                 n_fft: int=4000, win_length: int=4000, hop_length: int=2000, n_mels:int = 128):
+                 n_fft: int=4000, win_length: int=4000, hop_length: int=2000, n_mels: int = 128):
         super(WavEmbedding, self).__init__()
         self.spectrogram = torchaudio.transforms.MelSpectrogram(
             sample_rate=frame_rate,
@@ -109,8 +109,21 @@ class WavEmbedding(nn.Module):
         )
         self.ffn = nn.Linear(n_mels, emb_size)
 
+        self.sample_length = sample_length
+        self.frame_rate = frame_rate
+        self.emb_size = emb_size
+        self.n_fft = n_fft
+        self.win_length = win_length
+        self.hop_length = hop_length
+        self.n_mels = n_mels
+
     def forward(self, samples: Tensor):
-        return self.ffn(self.spectrogram(samples))
+        samples = torch.permute(samples, (1, 0))
+        
+        spec = self.spectrogram(samples)
+        spec = torch.permute(spec, (0, 2, 1))
+        out = self.ffn(spec)
+        return out
 
 class MidiTokenEmbedding(nn.Module):
     def __init__(self, vocab_size: int, emb_size: int):
@@ -150,6 +163,8 @@ class Wav2MidiTokenTransformer(nn.Module):
                 memory_key_padding_mask: Tensor):
         src_emb = self.positional_encoding(self.src_emb(src))
         tgt_emb = self.positional_encoding(self.tgt_emb(tgt))
+        src_emb = torch.permute(src_emb, (1, 0, 2))
+        tgt_emb = torch.permute(tgt_emb, (1, 0, 2))
         outs = self.transformer(src_emb, tgt_emb, src_mask, tgt_mask, None,
                                 src_padding_mask, tgt_padding_mask,
                                 memory_key_padding_mask)
@@ -222,7 +237,8 @@ class Main:
         
         src = torch.nn.functional.pad(wav, (0, pad_amount), mode='constant', value=0)
         src = torch.reshape(src, (self.hp.sample_length, -1))
-        tgt = self.tokenizer.tokenize(pitch_intervals, toInts=True, padToLength=self.hp.maxPredictedTokens)
+        tgt = self.tokenizer.tokenize(pitch_intervals, batchSize=src.shape[1], toInts=True, padToLength=self.hp.maxPredictedTokens)
+        tgt = Tensor(tgt)
 
         return src, tgt
     
@@ -233,15 +249,16 @@ class Main:
 
         for training_file in get_training_files():
             src, tgt = self.batchify(training_file)
+
             nBatches += src.shape[0]
 
             src = src.to(self.hp.device)
             tgt = tgt.to(self.hp.device)
 
-            tgt_input = tgt[:-1, :]
+            tgt_input = tgt[:, :-1]
             src_mask, tgt_mask, src_padding_mask, tgt_padding_mask = create_mask(src, tgt_input, self.hp.device, self.tokenizer)
 
-            logits = self.model(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask)
+            logits = self.transformer(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask)
             self.optimizer.zero_grad()
 
             tgt_out = tgt[1:, :]

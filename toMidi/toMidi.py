@@ -55,7 +55,13 @@ class Hyperparameters:
                  lr=0.0001,
                  betas=(0.9, 0.98),
                  eps=1e-9,
-                 num_epochs=10):
+                 num_epochs=10,
+                 dropout: float=0.1,
+
+                 n_fft: int=4000,
+                 win_length: int=4000,
+                 hop_length: int=2000,
+                 n_mels: int = 128):
         
         self.clipLength = clipLength
         self.sample_length = sample_rate * clipLength
@@ -74,10 +80,18 @@ class Hyperparameters:
         self.betas = betas
         self.eps = eps
         self.num_epochs = num_epochs
+        self.dropout = dropout
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if torch.cuda.is_available():
             print("Using CUDA acceleration!")
+
+
+        self.n_fft = n_fft
+        self.win_length = win_length
+        self.hop_length = hop_length
+        self.n_mels = n_mels
+        self.nHops = 1 + (self.sample_length // self.hop_length)
 
             
 class PositionalEncoding(nn.Module):
@@ -118,8 +132,6 @@ class WavEmbedding(nn.Module):
         self.n_mels = n_mels
 
     def forward(self, samples: Tensor):
-        samples = torch.permute(samples, (1, 0))
-        
         spec = self.spectrogram(samples)
         spec = torch.permute(spec, (0, 2, 1))
         out = self.ffn(spec)
@@ -132,7 +144,9 @@ class MidiTokenEmbedding(nn.Module):
         self.emb_size = emb_size
 
     def forward(self, tokens: Tensor):
-        return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
+        tokens = torch.permute(tokens, (1, 0))
+        x = self.embedding(tokens.long()) * math.sqrt(self.emb_size)
+        return x
 
 class Wav2MidiTokenTransformer(nn.Module):
     def __init__(self,
@@ -143,8 +157,12 @@ class Wav2MidiTokenTransformer(nn.Module):
                  sample_length: int,
                  frame_rate: int,
                  tgt_vocab_size: int,
-                 dim_feedforward: int = 512,
-                 dropout: float = 0.1):
+                 dim_feedforward: int,
+                 dropout: float,
+                 n_fft: int,
+                 win_length: int,
+                 hop_length: int,
+                 n_mels: int):
         super(Wav2MidiTokenTransformer, self).__init__()
         self.transformer = nn.Transformer(d_model=emb_size,
                                           nhead=nhead,
@@ -153,7 +171,8 @@ class Wav2MidiTokenTransformer(nn.Module):
                                           dim_feedforward=dim_feedforward,
                                           dropout=dropout)
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
-        self.src_emb = WavEmbedding(sample_length, frame_rate, emb_size)
+        self.src_emb = WavEmbedding(sample_length, frame_rate, emb_size,
+                                    n_fft, win_length, hop_length, n_mels)
         self.tgt_emb = MidiTokenEmbedding(tgt_vocab_size, emb_size)
         self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout)
 
@@ -165,10 +184,12 @@ class Wav2MidiTokenTransformer(nn.Module):
         tgt_emb = self.positional_encoding(self.tgt_emb(tgt))
         src_emb = torch.permute(src_emb, (1, 0, 2))
         tgt_emb = torch.permute(tgt_emb, (1, 0, 2))
+        
         outs = self.transformer(src_emb, tgt_emb, src_mask, tgt_mask, None,
                                 src_padding_mask, tgt_padding_mask,
                                 memory_key_padding_mask)
-        return self.generator(outs)
+        y = self.generator(outs)
+        return y
 
     def encode(self, src: Tensor, src_mask: Tensor):
         return self.transformer.encoder(self.positional_encoding(self.src_emb(src)), src_mask)
@@ -176,15 +197,17 @@ class Wav2MidiTokenTransformer(nn.Module):
     def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
         return self.transformer.decoder(self.positional_encoding(self.tgt_emb(tgt)), memory, tgt_mask)
 
-def create_mask(src, tgt, device, tokenizer):
-    src_seq_len = src.shape[0]
+def create_mask(src, tgt, device, tokenizer, hp):
+    src_seq_len = hp.nHops
     tgt_seq_len = tgt.shape[0]
+
 
     tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt_seq_len)
     src_mask = torch.zeros((src_seq_len, src_seq_len), device=device).type(torch.bool)
 
-    src_padding_mask = (src == tokenizer.padIndex()).transpose(0, 1)
+    src_padding_mask = torch.zeros((src.shape[0], src_seq_len))
     tgt_padding_mask = (tgt == tokenizer.padIndex()).transpose(0, 1)
+
     return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
 
 
@@ -219,7 +242,12 @@ class Main:
                                                     self.hp.sample_length,
                                                     self.hp.frame_rate,
                                                     self.tokenizer.vocab_size(),
-                                                    self.hp.ffn_hid_dim)
+                                                    self.hp.ffn_hid_dim,
+                                                    self.hp.dropout,
+                                                    self.hp.n_fft,
+                                                    self.hp.win_length,
+                                                    self.hp.hop_length,
+                                                    self.hp.n_mels)
         for p in self.transformer.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
@@ -237,8 +265,12 @@ class Main:
         
         src = torch.nn.functional.pad(wav, (0, pad_amount), mode='constant', value=0)
         src = torch.reshape(src, (self.hp.sample_length, -1))
-        tgt = self.tokenizer.tokenize(pitch_intervals, batchSize=src.shape[1], toInts=True, padToLength=self.hp.maxPredictedTokens)
+        src = torch.permute(src, (1, 0))
+        tgt = self.tokenizer.tokenize(pitch_intervals, batchSize=src.shape[0], toInts=True, padToLength=self.hp.maxPredictedTokens)
         tgt = Tensor(tgt)
+        
+        tgt = torch.permute(tgt, (1, 0))
+        
 
         return src, tgt
     
@@ -248,6 +280,7 @@ class Main:
         nBatches = 0
 
         for training_file in get_training_files():
+            print(training_file)
             src, tgt = self.batchify(training_file)
 
             nBatches += src.shape[0]
@@ -255,13 +288,16 @@ class Main:
             src = src.to(self.hp.device)
             tgt = tgt.to(self.hp.device)
 
-            tgt_input = tgt[:, :-1]
-            src_mask, tgt_mask, src_padding_mask, tgt_padding_mask = create_mask(src, tgt_input, self.hp.device, self.tokenizer)
+            tgt_input = tgt[:-1, :]
+            src_mask, tgt_mask, src_padding_mask, tgt_padding_mask = create_mask(src, tgt_input, self.hp.device, self.tokenizer, self.hp)
 
+            print("will pass to transformer")
             logits = self.transformer(src, tgt_input, src_mask, tgt_mask, src_padding_mask, tgt_padding_mask, src_padding_mask)
+            print("did pass to transformer")
             self.optimizer.zero_grad()
 
-            tgt_out = tgt[1:, :]
+
+            tgt_out = tgt[1:, :].long()
             loss = self.loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
             loss.backward()
             self.optimizer.step()
@@ -269,7 +305,7 @@ class Main:
 
         return losses / nBatches
 
-    def evaluate(self): 
+    def evaluate(self):
         self.model.eval()
         losses = 0
         nBatches = 0

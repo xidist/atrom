@@ -43,7 +43,7 @@ class Hyperparameters:
     def __init__(self,
                  clipLength: float=1,
                  timeGranularity: float=0.05,
-                 maxPredictedTokens: int=100,
+                 maxPredictedTokens: int=300,
                  
                  sample_rate: int=16000,
                  emb_size=512,
